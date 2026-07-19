@@ -1,0 +1,20 @@
+# Build artifacts
+/bin/
+*.exe
+
+# Test / coverage output
+coverage.out
+*.out
+*.test
+
+# Local ACME cert cache / secrets
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code local state
+.claude/
