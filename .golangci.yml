@@ -1,0 +1,32 @@
+# golangci-lint configuration. Run: golangci-lint run
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosimple
+    - misspell
+    - bodyclose
+    - gosec
+
+linters-settings:
+  gosec:
+    excludes:
+      # G402 InsecureSkipVerify is an intentional, documented opt-in (backend_tls).
+      - G402
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Test files may use weaker crypto / rand and skip some error checks.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
