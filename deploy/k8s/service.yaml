@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rplb
+  labels: { app: rplb }
+spec:
+  type: LoadBalancer
+  selector: { app: rplb }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+# Admin/metrics kept as a separate ClusterIP service (not exposed externally).
+apiVersion: v1
+kind: Service
+metadata:
+  name: rplb-admin
+  labels: { app: rplb }
+spec:
+  type: ClusterIP
+  selector: { app: rplb }
+  ports:
+    - { name: admin, port: 9090, targetPort: admin }

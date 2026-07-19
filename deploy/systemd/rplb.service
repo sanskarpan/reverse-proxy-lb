@@ -1,0 +1,28 @@
+[Unit]
+Description=Reverse Proxy Load Balancer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rplb
+Group=rplb
+ExecStart=/usr/local/bin/proxy --config /etc/rplb/config.yaml
+# SIGHUP reloads config (live backend add/remove/reweight, rate limits, log level).
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+# Give in-flight requests time to drain (>= server.shutdown_timeout).
+TimeoutStopSec=40s
+KillSignal=SIGTERM
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/rplb
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

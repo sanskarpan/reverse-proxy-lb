@@ -1,0 +1,28 @@
+replicaCount: 2
+image:
+  repository: rplb
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: LoadBalancer
+  port: 80
+resources:
+  requests: { cpu: 100m, memory: 64Mi }
+  limits: { cpu: "1", memory: 256Mi }
+# Inline proxy config rendered into a ConfigMap. Override as needed.
+config: |
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    shutdown_timeout: 30s
+  backends:
+    - url: "http://app:80"
+      weight: 1
+  load_balancer:
+    algorithm: "round_robin"
+    health_check: { enabled: true, interval: 5s, timeout: 2s, path: "/health" }
+  circuit_breaker: { enabled: true, failure_threshold: 5, success_threshold: 2, timeout: 30s }
+  rate_limiter: { enabled: true, requests_per_second: 2000, burst: 2000 }
+  logging: { level: "info", format: "json" }
+  metrics: { enabled: true, host: "0.0.0.0", port: 9090 }
+  compression: { enabled: true }

@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rplb
+  labels: { app: rplb }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: rplb }
+  template:
+    metadata:
+      labels: { app: rplb }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 40   # >= server.shutdown_timeout (30s) for clean drain
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: rplb
+          image: rplb:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/rplb/config.yaml"]
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: admin, containerPort: 9090 }
+          # Liveness = process up; readiness = at least one healthy backend.
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }   # let endpoints drain before SIGTERM
+          resources:
+            requests: { cpu: "100m", memory: "64Mi" }
+            limits:   { cpu: "1",    memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/rplb, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: rplb-config }
