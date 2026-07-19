@@ -1,0 +1,37 @@
+# Local demo: the reverse proxy in front of three backend servers.
+#   docker compose up --build
+#   curl localhost:8080/            # round-robins across backends
+#   curl localhost:9090/metrics     # Prometheus metrics
+#   curl localhost:9090/readyz      # readiness probe
+services:
+  backend1:
+    build: .
+    image: rplb:latest
+    entrypoint: ["/test_server"]
+    command: ["8001", "backend-1"]
+
+  backend2:
+    build: .
+    image: rplb:latest
+    entrypoint: ["/test_server"]
+    command: ["8002", "backend-2"]
+
+  backend3:
+    build: .
+    image: rplb:latest
+    entrypoint: ["/test_server"]
+    command: ["8003", "backend-3"]
+
+  proxy:
+    build: .
+    image: rplb:latest
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+    command: ["--config", "/etc/rplb/config.docker.yaml"]
+    volumes:
+      - ./configs/config.docker.yaml:/etc/rplb/config.docker.yaml:ro
+    ports:
+      - "8080:8080"
+      - "9090:9090"
