@@ -350,7 +350,7 @@ func fireMirror(client *http.Client, url string, r *http.Request, body []byte) {
 		req.Header = headers
 		req.Header.Set("X-Mirrored-From", r.Host)
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) // #nosec G704 -- SSRF by design; mirror target is operator-configured
 		if err != nil {
 			return
 		}
