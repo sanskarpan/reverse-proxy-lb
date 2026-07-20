@@ -58,7 +58,7 @@ first-class without breaking the base `Balancer` interface.
 | # | Priority | Effort | Item |
 |---|----------|--------|------|
 | 2.4 | P2 | M | **Passive health checking** — *effectively delivered by §1 outlier detection* (live request outcomes eject/reinstate backends via `OutcomeObserver`). Left open only for a fuller unification/config surface. |
-| 2.5-grpc | P2 | M | **gRPC health checks** (gRPC health-checking protocol) — *deferred* (needs grpc-go). TCP + HTTP checks shipped. |
+| ✅ 2.5-grpc | P2 | M | **gRPC health checks** (gRPC health-checking protocol) — shipped via PR #92 (`internal/health/grpc_health_server.go`; grpc.health.v1 server on dedicated port 9091, status tied to live backend count, reflection on by default). |
 
 **Shipped:** rise/fall thresholds (2.1), configurable criteria — method/expected-statuses/body-match/Host/headers (2.2), interval jitter (2.3), TCP checks (2.5), per-backend overrides (2.6), startup-grace / readiness (2.7).
 
@@ -112,8 +112,8 @@ first-class without breaking the base `Balancer` interface.
 | ✅ 5.1 | P1 | S | **Config-driven upstream timeouts** — `server.upstream.{dial,tls_handshake,response_header,expect_continue,idle_conn}_timeout`, defaulting to the §0 hardening constants. |
 | ✅ 5.2 | P1 | M | **Per-backend connection pools** — each cached backend proxy owns its own `*http.Transport`, so `max_idle_conns_per_host` / `max_conns_per_host` apply per backend. |
 | ✅ 5.3 | P1 | M | **HTTP/2 upstream (h2c)** — `server.upstream.http2`: https via ALPN `ForceAttemptHTTP2`, http via `x/net/http2` h2c. (Enables basic gRPC passthrough.) |
-| ◑ 5.4 | P2 | L | **gRPC proxying** — **carried today**: h2c upstream (5.3) tunnels gRPC (HTTP/2 + trailers via `ReverseProxy`), and per-method routing works via L7 `path_prefix` routes (a gRPC method is `/pkg.Svc/Method`). gRPC-*native* health/reflection needs `grpc-go` (follow-up). |
-| ⨯ 5.5 | P2 | L | **HTTP/3 / QUIC** — **not feasible without a dependency**: Go's stdlib has no QUIC. Requires `quic-go` (large dep) + a QUIC client to e2e; genuinely out of the stdlib+`x/*` policy. Documented as the one intentionally-unimplemented item. |
+| ✅ 5.4 | P2 | L | **gRPC proxying** — fully done: h2c upstream tunnels gRPC traffic; L7 path routing dispatches per-method; native gRPC Health Protocol + server reflection shipped via PR #92 (`internal/health`). |
+| ✅ 5.5 | P2 | L | **HTTP/3 / QUIC** — shipped via PR #93 (`internal/server/h3.go`; `quic-go/http3` server shares TLS cert, `Alt-Svc: h3=":PORT"` middleware, graceful `Shutdown`, config validator requires TLS). |
 | ✅ 5.6 | P2 | M | **L4 TCP proxy** — new `internal/tcpproxy`; `server.l4.{enabled,port}` forwards raw TCP through the balancer (UDP not included). |
 | ✅ 5.7 | P2 | S | **WebSocket idle timeout & max message** — `server.websocket.{idle_timeout,max_message_bytes}` enforced on the hijacked conn (idle read-deadline + cumulative byte cap). |
 | ✅ 5.8 | P2 | S | **Client-disconnect cancellation** — upstream context derives from the client request; a disconnect aborts the in-flight backend call (regression-tested). |
