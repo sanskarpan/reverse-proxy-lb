@@ -81,7 +81,8 @@ func (p *Proxy) Serve(ln net.Listener) error {
 			}
 			// Retry on temporary/transient accept errors; bail otherwise.
 			var ne net.Error
-			if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck // Temporary retained for accept backoff
+			//lint:ignore SA1019 ne.Temporary() is deprecated but retained for accept-loop backoff; timeouts are the common case
+			if errors.As(err, &ne) && ne.Temporary() {
 				time.Sleep(5 * time.Millisecond)
 				continue
 			}
