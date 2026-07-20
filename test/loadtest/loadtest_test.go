@@ -2,7 +2,6 @@ package loadtest_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -13,20 +12,6 @@ import (
 	"reverse-proxy-lb/internal/config"
 	"reverse-proxy-lb/internal/server"
 )
-
-// loadTestClient is a shared HTTP client tuned for load-test goroutines: a
-// generous connection pool prevents transport errors when many goroutines fire
-// requests concurrently against an httptest.Server.
-var loadTestClient = &http.Client{
-	Transport: &http.Transport{
-		MaxIdleConns:        500,
-		MaxIdleConnsPerHost: 100,
-		MaxConnsPerHost:     200,
-		DisableKeepAlives:   false,
-		IdleConnTimeout:     30 * time.Second,
-	},
-	Timeout: 10 * time.Second,
-}
 
 const (
 	numBackends   = 3
@@ -396,5 +381,4 @@ func TestLoadHarnessRateLimit(t *testing.T) {
 
 	t.Logf("PASS: %d requests rate-limited (429), %d succeeded, 0 5xx errors",
 		count429, count200)
-	_ = fmt.Sprintf("rate-limit test complete") // suppress unused import lint
 }
