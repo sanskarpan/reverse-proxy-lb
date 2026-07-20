@@ -17,7 +17,7 @@ type WeightedRandom struct {
 }
 
 func NewWeightedRandom() *WeightedRandom {
-	return &WeightedRandom{rng: rand.New(rand.NewSource(time.Now().UnixNano()))}
+	return &WeightedRandom{rng: rand.New(rand.NewSource(time.Now().UnixNano()))} // #nosec G404 -- non-crypto weighted selection
 }
 
 func (w *WeightedRandom) Next() (*Backend, error) {

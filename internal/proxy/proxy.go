@@ -181,7 +181,7 @@ func New(b balancer.Balancer, cb *circuit.CircuitBreaker, retryCfg config.RetryC
 		proxies:        make(map[string]*httputil.ReverseProxy),
 		tripOn:         toSet([]string{"connect", "timeout"}),
 		retryOn:        toSet([]string{"connect", "timeout"}),
-		rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:            rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- non-crypto canary/fault-injection selection
 	}
 	// A representative (host-agnostic) transport is retained on p.transport so
 	// existing introspection (and the §0 timeout-hardening test) keeps working. The
@@ -533,6 +533,9 @@ func (p *Proxy) setStickyCookie(w http.ResponseWriter, backend *balancer.Backend
 	if p.sticky.Cookie == "" {
 		return
 	}
+	// #nosec G124 -- Secure is intentionally omitted: the proxy may serve
+	// plain HTTP. HttpOnly and SameSite=Lax are set; Secure must be enforced
+	// at the TLS terminator (load balancer / ingress) above the proxy.
 	cookie := &http.Cookie{
 		Name:     p.sticky.Cookie,
 		Value:    backendToken(backend),
@@ -948,7 +951,7 @@ func (p *Proxy) proxyFor(backend *balancer.Backend) (*httputil.ReverseProxy, err
 		return rp, nil
 	}
 
-	rp = httputil.NewSingleHostReverseProxy(target)
+	rp = httputil.NewSingleHostReverseProxy(target) // #nosec G704 -- SSRF is by design for a reverse proxy; target is validated config
 	rp.Transport = p.transportFor(target)
 	// Reuse copy buffers across requests to cut per-request allocations on the
 	// body-streaming hot path (§10.2).

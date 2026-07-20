@@ -264,7 +264,7 @@ func NewSlowStart(inner Balancer, window time.Duration) *SlowStart {
 		inner:        inner,
 		window:       window,
 		clock:        time.Now,
-		rng:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:          rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- non-crypto slow-start ramp jitter
 		wasHealthy:   make(map[*Backend]bool),
 		healthySince: make(map[*Backend]time.Time),
 	}
