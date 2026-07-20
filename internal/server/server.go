@@ -24,6 +24,7 @@ import (
 	"reverse-proxy-lb/internal/routing"
 	"reverse-proxy-lb/internal/tcpproxy"
 	"reverse-proxy-lb/internal/tlsutil"
+	"reverse-proxy-lb/internal/tracing"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ const (
 	maxHeaderBytes = 1 << 20
 )
 
+// Server is the central coordinator: it wires together the proxy, balancer, middleware chain, health checkers, and optional TLS, metrics, and gRPC health servers.
 type Server struct {
 	cfg           *config.Config
 	configPath    string
@@ -98,6 +100,11 @@ type Server struct {
 	// cfg.Server.HTTP3.Enabled. Non-nil only after Start() has been called and
 	// TLS is configured; closed in Stop().
 	h3Server *http3.Server
+
+	// tracingShutdown is the cleanup func returned by tracing.Setup; non-nil
+	// after Start() when tracing is configured. It is called in Stop() to flush
+	// and shut down the TracerProvider.
+	tracingShutdown func(context.Context) error
 
 	// reloadMu serializes reloadConfig so a SIGHUP and a POST /reload (or two
 	// concurrent /reload requests) cannot race on s.cfg's fields.
@@ -904,6 +911,15 @@ func (s *Server) setupHTTPServer() {
 	// middleware and the proxy handler.
 	handler = middleware.Recover(handler)
 
+	// Tracing wraps the fully assembled handler so spans cover the complete
+	// request lifecycle including all middleware. Only installed when tracing is
+	// enabled to avoid importing otelhttp overhead in the disabled case (the noop
+	// provider still avoids any network activity, but skipping the wrapper is
+	// cleaner in production configs that do not use tracing).
+	if s.cfg.Tracing.Enabled {
+		handler = tracing.Middleware()(handler)
+	}
+
 	s.httpServer = &http.Server{
 		Addr:              s.cfg.GetAddr(),
 		Handler:           handler,
@@ -1065,10 +1081,31 @@ func aclEnabled(cfg config.ACLConfig) bool {
 	return len(cfg.Allow) > 0 || len(cfg.Deny) > 0 || len(cfg.Methods) > 0 || len(cfg.BlockedPaths) > 0
 }
 
+// Start begins serving on all configured listeners and blocks until the server is stopped.
 func (s *Server) Start() error {
 	logging.Info("Starting server", map[string]interface{}{
 		"addr": s.cfg.GetAddr(),
 	})
+
+	// Setup OpenTelemetry tracing. When cfg.Tracing.Enabled is false, Setup
+	// installs a noop provider and returns a no-op shutdown, so this call is safe
+	// to make unconditionally. The returned shutdown is stored so Stop() can flush
+	// any buffered spans before the process exits.
+	tracingCfg := tracing.Config{
+		Enabled:     s.cfg.Tracing.Enabled,
+		Exporter:    s.cfg.Tracing.Exporter,
+		Endpoint:    s.cfg.Tracing.Endpoint,
+		SampleRate:  s.cfg.Tracing.SampleRate,
+		ServiceName: s.cfg.Tracing.ServiceName,
+	}
+	tracingShutdown, tracingErr := tracing.Setup(tracingCfg)
+	if tracingErr != nil {
+		logging.Error("Failed to set up tracing; continuing without tracing", map[string]interface{}{
+			"error": tracingErr.Error(),
+		})
+	} else {
+		s.tracingShutdown = tracingShutdown
+	}
 
 	if s.cfg.Metrics.Enabled {
 		s.metricsServer = &http.Server{
@@ -1209,6 +1246,7 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// Stop gracefully shuts down all listeners and background goroutines within the configured shutdown timeout.
 func (s *Server) Stop() error {
 	logging.Info("Shutting down server", nil)
 
@@ -1274,9 +1312,20 @@ func (s *Server) Stop() error {
 	// prevent the main HTTP listener from being shut down.
 	stopH3(s.h3Server, timeout)
 
+	// Flush and shut down the TracerProvider (if started). This must happen after
+	// all HTTP listeners are closed to guarantee no more spans are created.
+	if s.tracingShutdown != nil {
+		if tErr := s.tracingShutdown(ctx); tErr != nil {
+			logging.Error("Tracing shutdown error", map[string]interface{}{
+				"error": tErr.Error(),
+			})
+		}
+	}
+
 	return s.httpServer.Shutdown(ctx)
 }
 
+// Run starts the server and blocks, handling SIGINT/SIGTERM (graceful stop) and SIGHUP (config reload).
 func (s *Server) Run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -1352,17 +1401,64 @@ func (s *Server) reloadConfig() {
 
 	// Algorithm changes are NOT live: the base balancer + wrapper stack is built
 	// once at New. Warn (only) when the algorithm changed so the operator knows a
-	// restart is required. Route/canary group topology is likewise out of scope.
+	// restart is required.
 	if s.cfg.LoadBalancer.Algorithm != newCfg.LoadBalancer.Algorithm {
 		logging.Warn("Load-balancing algorithm change requires a restart to take effect", nil)
 	}
-	if !routeGroupsEqual(s.cfg.Routes, newCfg.Routes) || !canaryEqual(s.cfg.Canary, newCfg.Canary) {
-		logging.Warn("Route/canary group changes require a restart to take effect", nil)
+
+	// Route hot-reload: when the route table changed and a router is installed,
+	// atomically swap in the new route table. Readers (serveHTTP) see either the
+	// full old or the full new table, never a mix. If the new config adds routes
+	// but no router exists yet (i.e. the original config had none), we can't
+	// install one without rebuilding the proxy's handler chain, so we warn instead.
+	if !routeGroupsEqual(s.cfg.Routes, newCfg.Routes) {
+		if s.router != nil {
+			if err := s.router.UpdateRoutes(newCfg.Routes); err != nil {
+				logging.Error("Failed to apply route changes; existing routes unchanged", map[string]interface{}{
+					"error": err.Error(),
+				})
+			} else {
+				logging.Info("Routes reloaded", map[string]interface{}{
+					"routes": len(newCfg.Routes),
+				})
+			}
+		} else {
+			logging.Warn("Route changes require a restart when no router was initially configured", nil)
+		}
+	}
+
+	// Canary weight hot-reload: when only the weight changed, update it atomically
+	// via UpdateCanaryWeight (which is serialized by randMu). Topology changes
+	// (different backends or algorithm) still require a restart.
+	if !canaryEqual(s.cfg.Canary, newCfg.Canary) {
+		oldBackendsOnly := s.cfg.Canary.Enabled == newCfg.Canary.Enabled &&
+			s.cfg.Canary.Algorithm == newCfg.Canary.Algorithm &&
+			backendsEqual(s.cfg.Canary.Backends, newCfg.Canary.Backends)
+		if oldBackendsOnly && s.cfg.Canary.WeightPercent != newCfg.Canary.WeightPercent {
+			s.proxy.UpdateCanaryWeight(newCfg.Canary.WeightPercent)
+			logging.Info("Canary weight updated", map[string]interface{}{
+				"weight_percent": newCfg.Canary.WeightPercent,
+			})
+		} else {
+			logging.Warn("Canary topology changes require a restart to take effect", nil)
+		}
+	}
+
+	// Mirror and fault-injection config are baked into the HTTP handler chain at
+	// startup and cannot be swapped live without rebuilding the chain. Warn when
+	// they change so the operator knows a restart is required.
+	if s.cfg.Mirror != newCfg.Mirror {
+		logging.Warn("Mirror config changes require a restart to take effect", nil)
+	}
+	if s.cfg.FaultInjection != newCfg.FaultInjection {
+		logging.Warn("Fault-injection config changes require a restart to take effect", nil)
 	}
 
 	s.cfg.Logging = newCfg.Logging
 	s.cfg.RateLimiter = newCfg.RateLimiter
 	s.cfg.Backends = newCfg.Backends
+	s.cfg.Routes = newCfg.Routes
+	s.cfg.Canary = newCfg.Canary
 
 	logging.Info("Configuration reloaded", nil)
 }
@@ -1564,10 +1660,12 @@ func (s *Server) MetricsMux() http.Handler {
 	return s.metricsMux
 }
 
+// GetMetrics returns the Metrics instance used by this server.
 func (s *Server) GetMetrics() *metrics.Metrics {
 	return s.metrics
 }
 
+// GetBalancer returns the default balancer used by this server.
 func (s *Server) GetBalancer() balancer.Balancer {
 	return s.balancer
 }
