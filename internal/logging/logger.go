@@ -1,15 +1,15 @@
 package logging
 
 import (
-	"encoding/json"
-	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
-	"time"
 )
 
-type Level string
+// Level mirrors the old string-typed constants so external packages that
+// imported them continue to compile unchanged.
+type Level = string
 
 const (
 	DebugLevel Level = "debug"
@@ -18,145 +18,150 @@ const (
 	ErrorLevel Level = "error"
 )
 
+// Logger is a thin wrapper around *slog.Logger.  It uses a *slog.LevelVar for
+// thread-safe level hot-reload (replaces the old sync.Mutex + custom level).
 type Logger struct {
-	mu     sync.Mutex
-	level  Level
+	mu     sync.RWMutex // guards inner and format (SetFormat may recreate inner)
+	inner  *slog.Logger
+	lv     *slog.LevelVar
 	format string
 	output io.Writer
 }
 
-type LogEntry struct {
-	Timestamp string                 `json:"timestamp"`
-	Level     string                 `json:"level"`
-	Message   string                 `json:"message"`
-	Fields    map[string]interface{} `json:"fields,omitempty"`
-}
-
-var defaultLogger *Logger
-
-func init() {
-	defaultLogger = &Logger{
-		level:  InfoLevel,
-		format: "json",
-		output: os.Stdout,
-	}
-}
-
-func New(level, format string) *Logger {
-	l := &Logger{
-		level:  parseLevel(level),
-		format: format,
-		output: os.Stdout,
-	}
-	return l
-}
-
-func parseLevel(level string) Level {
+// parseSlogLevel converts the legacy level strings to slog.Level.
+func parseSlogLevel(level string) slog.Level {
 	switch level {
 	case "debug":
-		return DebugLevel
+		return slog.LevelDebug
 	case "warn":
-		return WarnLevel
+		return slog.LevelWarn
 	case "error":
-		return ErrorLevel
+		return slog.LevelError
 	default:
-		return InfoLevel
+		return slog.LevelInfo
 	}
 }
 
+// newInner constructs a *slog.Logger for the given format and LevelVar.
+func newInner(format string, lv *slog.LevelVar, out io.Writer) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: lv}
+	var h slog.Handler
+	if format == "text" {
+		h = slog.NewTextHandler(out, opts)
+	} else {
+		h = slog.NewJSONHandler(out, opts)
+	}
+	return slog.New(h)
+}
+
+// New creates a Logger with the given level and format ("json" or "text").
+// The signature is unchanged from the previous implementation (no error return).
+func New(level, format string) *Logger {
+	lv := &slog.LevelVar{}
+	lv.Set(parseSlogLevel(level))
+	if format == "" {
+		format = "json"
+	}
+	out := os.Stdout
+	return &Logger{
+		inner:  newInner(format, lv, out),
+		lv:     lv,
+		format: format,
+		output: out,
+	}
+}
+
+// SetLevel updates the logging level; it is safe to call concurrently (hot-reload).
 func (l *Logger) SetLevel(level string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = parseLevel(level)
+	l.lv.Set(parseSlogLevel(level))
 }
 
+// SetFormat changes the output format ("json" or "text") and rebuilds the
+// underlying handler.  It is safe to call concurrently.
 func (l *Logger) SetFormat(format string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if format != "" {
-		l.format = format
-	}
-}
-
-func (l *Logger) shouldLog(level Level) bool {
-	switch l.level {
-	case DebugLevel:
-		return true
-	case InfoLevel:
-		return level != DebugLevel
-	case WarnLevel:
-		return level == WarnLevel || level == ErrorLevel
-	case ErrorLevel:
-		return level == ErrorLevel
-	}
-	return false
-}
-
-func (l *Logger) log(level Level, msg string, fields map[string]interface{}) {
-	// Hold the mutex across the level check AND the write. l.level and l.format
-	// are mutated by SetLevel/SetFormat (e.g. from a live config reload), so
-	// reading them here without the lock races with a concurrent reload while
-	// requests are being logged. shouldLog reads l.level, so it must run under
-	// the lock too.
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if !l.shouldLog(level) {
+	if format == "" {
 		return
 	}
-
-	entry := LogEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Level:     string(level),
-		Message:   msg,
-		Fields:    fields,
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.format == format {
+		return
 	}
+	l.format = format
+	l.inner = newInner(format, l.lv, l.output)
+}
 
-	if l.format == "json" {
-		data, _ := json.Marshal(entry)
-		fmt.Fprintln(l.output, string(data))
-	} else {
-		fmt.Fprintf(l.output, "[%s] %s: %s\n", entry.Timestamp, entry.Level, entry.Message)
+// fieldsToAttrs converts the legacy map[string]interface{} into slog.Attr
+// key-value pairs so callers need no source changes.
+func fieldsToAttrs(fields map[string]interface{}) []any {
+	if len(fields) == 0 {
+		return nil
 	}
+	attrs := make([]any, 0, len(fields)*2)
+	for k, v := range fields {
+		attrs = append(attrs, k, v)
+	}
+	return attrs
 }
 
 func (l *Logger) Debug(msg string, fields map[string]interface{}) {
-	l.log(DebugLevel, msg, fields)
+	l.mu.RLock()
+	inner := l.inner
+	l.mu.RUnlock()
+	inner.Debug(msg, fieldsToAttrs(fields)...)
 }
 
 func (l *Logger) Info(msg string, fields map[string]interface{}) {
-	l.log(InfoLevel, msg, fields)
+	l.mu.RLock()
+	inner := l.inner
+	l.mu.RUnlock()
+	inner.Info(msg, fieldsToAttrs(fields)...)
 }
 
 func (l *Logger) Warn(msg string, fields map[string]interface{}) {
-	l.log(WarnLevel, msg, fields)
+	l.mu.RLock()
+	inner := l.inner
+	l.mu.RUnlock()
+	inner.Warn(msg, fieldsToAttrs(fields)...)
 }
 
 func (l *Logger) Error(msg string, fields map[string]interface{}) {
-	l.log(ErrorLevel, msg, fields)
+	l.mu.RLock()
+	inner := l.inner
+	l.mu.RUnlock()
+	inner.Error(msg, fieldsToAttrs(fields)...)
 }
 
+// ── package-level default logger ──────────────────────────────────────────────
+
+var defaultLogger = New(InfoLevel, "json")
+
+// Debug logs at debug level on the default logger.
 func Debug(msg string, fields map[string]interface{}) {
 	defaultLogger.Debug(msg, fields)
 }
 
+// Info logs at info level on the default logger.
 func Info(msg string, fields map[string]interface{}) {
 	defaultLogger.Info(msg, fields)
 }
 
+// Warn logs at warn level on the default logger.
 func Warn(msg string, fields map[string]interface{}) {
 	defaultLogger.Warn(msg, fields)
 }
 
+// Error logs at error level on the default logger.
 func Error(msg string, fields map[string]interface{}) {
 	defaultLogger.Error(msg, fields)
 }
 
+// SetLevel updates the default logger's level.
 func SetLevel(level string) {
 	defaultLogger.SetLevel(level)
 }
 
-// Configure applies the log level and format to the default logger. Called at
+// Configure applies level and format to the default logger.  Called at
 // startup so that config.logging settings actually take effect.
 func Configure(level, format string) {
 	defaultLogger.SetLevel(level)
