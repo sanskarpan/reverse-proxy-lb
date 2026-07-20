@@ -1902,7 +1902,7 @@ func (b BackendTLSConfig) ClientTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	cfg := &tls.Config{InsecureSkipVerify: b.InsecureSkipVerify} //nolint:gosec // opt-in for testing
+	cfg := &tls.Config{InsecureSkipVerify: b.InsecureSkipVerify} // #nosec G402 -- opt-in field, documented as for testing only
 
 	if b.CAFile != "" {
 		pem, err := os.ReadFile(b.CAFile)
