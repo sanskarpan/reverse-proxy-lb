@@ -19,7 +19,7 @@ type P2C struct {
 }
 
 func NewP2C() *P2C {
-	return &P2C{rng: rand.New(rand.NewSource(time.Now().UnixNano()))}
+	return &P2C{rng: rand.New(rand.NewSource(time.Now().UnixNano()))} // #nosec G404 -- non-crypto load balancing selection
 }
 
 func (p *P2C) Next() (*Backend, error) {

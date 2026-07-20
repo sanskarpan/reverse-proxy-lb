@@ -706,7 +706,7 @@ func (s *Stapler) refreshLoop(stop chan struct{}, t *stapleTarget) {
 		case <-stop:
 			return
 		case <-timer.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // #nosec G118 -- background renewal goroutine; no parent context to inherit
 			parsed, _ := s.refreshTarget(ctx, t)
 			cancel()
 			timer.Reset(s.nextRefresh(parsed))

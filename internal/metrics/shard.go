@@ -74,7 +74,7 @@ func localrand() uint32 {
 	x[0] = uintptr(unsafe.Pointer(&x))
 
 	// xorshift32 mix for better bit distribution.
-	v := uint32(x[0] >> 3) // discard the lowest 3 alignment bits
+	v := uint32(x[0] >> 3) // #nosec G115 -- non-cryptographic shard selection; discard lowest 3 alignment bits
 	v ^= v << 13
 	v ^= v >> 17
 	v ^= v << 5
