@@ -29,6 +29,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 const (
@@ -84,6 +87,11 @@ type Server struct {
 	// circuitBreaker is retained (when circuit breaking is enabled) so the
 	// metrics snapshot callback can report per-backend circuit state.
 	circuitBreaker *circuit.CircuitBreaker
+
+	// grpcHealthSrv is the optional native gRPC Health Checking Protocol server.
+	// Non-nil only when cfg.LoadBalancer.GRPCHealth.Enabled; stopped in Stop().
+	grpcHealthSrv    *grpc.Server
+	grpcHealthServer *health.GRPCHealthServer
 
 	// reloadMu serializes reloadConfig so a SIGHUP and a POST /reload (or two
 	// concurrent /reload requests) cannot race on s.cfg's fields.
@@ -967,6 +975,75 @@ func (s *Server) setupTLS() {
 	}
 }
 
+// startGRPCHealth creates and starts the gRPC Health Checking Protocol server
+// when cfg.LoadBalancer.GRPCHealth.Enabled. It registers the health service and
+// optionally gRPC reflection, then listens on the configured port. A background
+// goroutine polls hasHealthyBackend() every 5 s to keep the "proxy" service
+// status current. Must be called from Start().
+func (s *Server) startGRPCHealth() {
+	ghCfg := s.cfg.LoadBalancer.GRPCHealth
+	if !ghCfg.Enabled {
+		return
+	}
+
+	s.grpcHealthServer = health.NewGRPCHealthServer()
+
+	// Seed the "proxy" service status before accepting connections.
+	if s.hasHealthyBackend() {
+		s.grpcHealthServer.SetServingStatus("proxy", grpc_health_v1.HealthCheckResponse_SERVING)
+	} else {
+		s.grpcHealthServer.SetServingStatus("proxy", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	}
+
+	s.grpcHealthSrv = grpc.NewServer()
+	s.grpcHealthServer.Register(s.grpcHealthSrv)
+	if ghCfg.Reflection {
+		health.RegisterReflection(s.grpcHealthSrv)
+	}
+
+	addr := net.JoinHostPort(s.cfg.Server.Host, strconv.Itoa(ghCfg.Port))
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		logging.Error("Failed to start gRPC health server", map[string]interface{}{
+			"addr":  addr,
+			"error": err.Error(),
+		})
+		s.grpcHealthSrv = nil
+		s.grpcHealthServer = nil
+		return
+	}
+
+	logging.Info("Starting gRPC health server", map[string]interface{}{
+		"addr":       addr,
+		"reflection": ghCfg.Reflection,
+	})
+
+	go func() {
+		if err := s.grpcHealthSrv.Serve(lis); err != nil {
+			logging.Error("gRPC health server error", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+	}()
+
+	// Background goroutine: refresh the "proxy" service status every 5 s so
+	// health-check clients see up-to-date state as backends come and go.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if s.grpcHealthServer == nil {
+				return
+			}
+			if s.hasHealthyBackend() {
+				s.grpcHealthServer.SetServingStatus("proxy", grpc_health_v1.HealthCheckResponse_SERVING)
+			} else {
+				s.grpcHealthServer.SetServingStatus("proxy", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+			}
+		}
+	}()
+}
+
 // authEnabled reports whether the Auth middleware should be installed: only when
 // a concrete auth Type other than "none" is configured. An empty or "none" Type
 // means no authentication, matching middleware.Auth's own passthrough behavior.
@@ -1008,6 +1085,9 @@ func (s *Server) Start() error {
 			}
 		}()
 	}
+
+	// Start the optional gRPC Health Checking Protocol server (if enabled).
+	s.startGRPCHealth()
 
 	// Start the optional config file-watch loop. When cfg.Server.WatchConfig is
 	// set, a background goroutine polls the config file's mtime every
@@ -1154,6 +1234,12 @@ func (s *Server) Stop() error {
 
 	if s.metricsServer != nil {
 		_ = s.metricsServer.Shutdown(ctx)
+	}
+
+	// Gracefully stop the gRPC health server (if running). GracefulStop drains
+	// in-flight RPCs before closing; it is safe to call when grpcHealthSrv is nil.
+	if s.grpcHealthSrv != nil {
+		s.grpcHealthSrv.GracefulStop()
 	}
 
 	return s.httpServer.Shutdown(ctx)
