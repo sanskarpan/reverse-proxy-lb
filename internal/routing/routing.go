@@ -12,6 +12,7 @@ package routing
 import (
 	"net/http"
 	"strings"
+	"sync"
 
 	"reverse-proxy-lb/internal/balancer"
 	"reverse-proxy-lb/internal/config"
@@ -84,6 +85,7 @@ func (m *matcher) matches(req *http.Request) bool {
 // Router matches requests to a per-route balancer group, falling back to a
 // default balancer when no route matches (including the no-routes case).
 type Router struct {
+	mu     sync.RWMutex
 	routes []*matcher
 	def    balancer.Balancer
 }
@@ -124,7 +126,10 @@ func NewRouter(routes []config.RouteConfig, def balancer.Balancer) (*Router, err
 // or the default balancer if none match. It performs matching only: it does not
 // call Next / reserve any backend.
 func (r *Router) Route(req *http.Request) balancer.Balancer {
-	for _, m := range r.routes {
+	r.mu.RLock()
+	routes := r.routes
+	r.mu.RUnlock()
+	for _, m := range routes {
 		if m.matches(req) {
 			return m.bal
 		}
@@ -136,10 +141,48 @@ func (r *Router) Route(req *http.Request) balancer.Balancer {
 // followed by each per-route group, in route order. The server uses this to run
 // a health checker per group.
 func (r *Router) Groups() []balancer.Balancer {
-	groups := make([]balancer.Balancer, 0, len(r.routes)+1)
+	r.mu.RLock()
+	routes := r.routes
+	r.mu.RUnlock()
+	groups := make([]balancer.Balancer, 0, len(routes)+1)
 	groups = append(groups, r.def)
-	for _, m := range r.routes {
+	for _, m := range routes {
 		groups = append(groups, m.bal)
 	}
 	return groups
+}
+
+// UpdateRoutes atomically replaces the route table with a new set built from
+// routes. The default balancer is unchanged. Concurrent calls to Route / Groups
+// see either the full old or full new table, never a mix.
+func (r *Router) UpdateRoutes(routes []config.RouteConfig) error {
+	newMatchers := make([]*matcher, 0, len(routes))
+	for _, rc := range routes {
+		bal, err := BuildGroup(rc)
+		if err != nil {
+			return err
+		}
+		m := &matcher{
+			host:       strings.ToLower(rc.Host),
+			pathPrefix: rc.PathPrefix,
+			bal:        bal,
+		}
+		if len(rc.Methods) > 0 {
+			m.methods = make([]string, len(rc.Methods))
+			for i, meth := range rc.Methods {
+				m.methods[i] = strings.ToUpper(meth)
+			}
+		}
+		if len(rc.Headers) > 0 {
+			m.headers = make(map[string]string, len(rc.Headers))
+			for name, val := range rc.Headers {
+				m.headers[http.CanonicalHeaderKey(name)] = val
+			}
+		}
+		newMatchers = append(newMatchers, m)
+	}
+	r.mu.Lock()
+	r.routes = newMatchers
+	r.mu.Unlock()
+	return nil
 }

@@ -311,6 +311,22 @@ func (p *Proxy) SetCanary(b balancer.Balancer, weightPercent int) {
 	p.canaryWeight = weightPercent
 }
 
+// UpdateCanaryWeight atomically updates the weight of the existing canary
+// balancer without changing which balancer is installed. This allows a live
+// weight-only change without rebuilding the proxy's handler chain. weightPercent
+// is clamped to [0,100]. If no canary balancer has been set, the call is a no-op.
+func (p *Proxy) UpdateCanaryWeight(weightPercent int) {
+	if weightPercent < 0 {
+		weightPercent = 0
+	}
+	if weightPercent > 100 {
+		weightPercent = 100
+	}
+	p.randMu.Lock()
+	p.canaryWeight = weightPercent
+	p.randMu.Unlock()
+}
+
 // rollCanary rolls the proxy's seedable rng and reports whether the request should
 // be served from the canary pool. It returns true with probability canaryWeight/100,
 // using a uniform integer in [0,100) so weight 100 always routes to canary and weight
