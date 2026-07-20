@@ -745,6 +745,8 @@ func (p *Proxy) reserveAlternate(r *http.Request, tried map[*balancer.Backend]bo
 // backend's reservation when done. It returns the last error (nil on success), the
 // failure class of the final attempt ("" on success / non-5xx), and whether any
 // bytes were written to the client (in which case failover is impossible).
+//
+//lint:ignore ST1008 error-first tuple is established in this package; all callers match
 func (p *Proxy) attemptBackend(w http.ResponseWriter, r *http.Request, backend *balancer.Backend) (error, string, bool) {
 	defer backend.DecrConn()
 
@@ -830,6 +832,8 @@ func (p *Proxy) allowRetry() bool {
 // success), the failure class, whether any bytes were written to the client, and any
 // Retry-After delay parsed from the (5xx/429) response. Errors are captured from the
 // shared ReverseProxy's ErrorHandler via the request context.
+//
+//lint:ignore ST1008 error-first tuple is established in this package; all callers match
 func (p *Proxy) doRequest(w http.ResponseWriter, r *http.Request, backend *balancer.Backend) (error, string, bool, time.Duration) {
 	start := time.Now()
 	p.metrics.RecordBackendRequest(backend.URL)
@@ -1224,6 +1228,8 @@ func (p *Proxy) reserveHedgeBackends(r *http.Request, primary *balancer.Backend,
 
 // doHedgeAttempt runs a single hedge attempt into a private recorder, using the
 // shared cancellable ctx (so losers abort) and the per-try timeout if configured.
+//
+//lint:ignore ST1008 error-first tuple is established in this package; all callers match
 func (p *Proxy) doHedgeAttempt(ctx context.Context, r *http.Request, backend *balancer.Backend, rec *httptest.ResponseRecorder) (error, string, bool, time.Duration) {
 	start := time.Now()
 	p.metrics.RecordBackendRequest(backend.URL)
