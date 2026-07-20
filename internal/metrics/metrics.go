@@ -19,10 +19,13 @@ var latencyBucketBounds = []float64{
 }
 
 type Metrics struct {
-	mu               sync.RWMutex
-	TotalRequests    uint64
-	TotalErrors      uint64
-	TotalRetries     uint64
+	mu sync.RWMutex
+	// TotalRequests, TotalErrors, and TotalRetries are the three hottest
+	// global counters. They use ShardedCounter to eliminate false sharing
+	// across CPUs on high-parallelism workloads.
+	TotalRequests    *ShardedCounter
+	TotalErrors      *ShardedCounter
+	TotalRetries     *ShardedCounter
 	BackendRequests  map[string]*BackendMetrics
 	ResponseTimes    []time.Duration
 	responseTimesMu  sync.Mutex
@@ -35,9 +38,11 @@ type Metrics struct {
 	// observations (equivalent to the +Inf bucket). histSum is the sum
 	// of all observed durations in seconds (scaled by 1e9 as ns to keep
 	// it in an integer atomic, converted back on read).
+	// histCount and histSumNanos are hot on every RecordResponseTime call
+	// and are therefore also sharded to eliminate false sharing.
 	histBuckets  [11]uint64 // len(latencyBucketBounds)
-	histCount    uint64
-	histSumNanos uint64
+	histCount    *ShardedCounter
+	histSumNanos *ShardedCounter
 
 	// Requests bucketed by HTTP status class.
 	class2xx uint64
@@ -46,8 +51,9 @@ type Metrics struct {
 	class5xx uint64
 
 	// In-flight requests gauge and rate-limited counter.
+	// rateLimited is hot on every rejected request path and is sharded.
 	inFlight    int64
-	rateLimited uint64
+	rateLimited *ShardedCounter
 
 	// snapshotFunc, when set, is invoked at scrape time to obtain
 	// per-backend up/circuit-state gauges without importing balancer.
@@ -89,6 +95,12 @@ type BackendStat struct {
 
 func New() *Metrics {
 	return &Metrics{
+		TotalRequests:    NewShardedCounter(),
+		TotalErrors:      NewShardedCounter(),
+		TotalRetries:     NewShardedCounter(),
+		histCount:        NewShardedCounter(),
+		histSumNanos:     NewShardedCounter(),
+		rateLimited:      NewShardedCounter(),
 		BackendRequests:  make(map[string]*BackendMetrics),
 		maxResponseTimes: 1000,
 		startTime:        time.Now(),
@@ -96,15 +108,15 @@ func New() *Metrics {
 }
 
 func (m *Metrics) IncrRequest() {
-	atomic.AddUint64(&m.TotalRequests, 1)
+	m.TotalRequests.Add(1)
 }
 
 func (m *Metrics) IncrError() {
-	atomic.AddUint64(&m.TotalErrors, 1)
+	m.TotalErrors.Add(1)
 }
 
 func (m *Metrics) IncrRetry() {
-	atomic.AddUint64(&m.TotalRetries, 1)
+	m.TotalRetries.Add(1)
 }
 
 func (m *Metrics) RecordBackendRequest(url string) {
@@ -144,8 +156,8 @@ func (m *Metrics) RecordResponseTime(d time.Duration) {
 
 	// Feed the fixed-bucket latency histogram.
 	secs := d.Seconds()
-	atomic.AddUint64(&m.histCount, 1)
-	atomic.AddUint64(&m.histSumNanos, uint64(d.Nanoseconds()))
+	m.histCount.Add(1)
+	m.histSumNanos.Add(int64(d.Nanoseconds()))
 	for i, ub := range latencyBucketBounds {
 		if secs <= ub {
 			atomic.AddUint64(&m.histBuckets[i], 1)
@@ -181,7 +193,7 @@ func (m *Metrics) DecInFlight() {
 
 // IncrRateLimited increments the rate-limited requests counter.
 func (m *Metrics) IncrRateLimited() {
-	atomic.AddUint64(&m.rateLimited, 1)
+	m.rateLimited.Add(1)
 }
 
 // SetSnapshotFunc registers a callback invoked at scrape time to obtain
@@ -211,9 +223,9 @@ func (m *Metrics) GetPrometheusMetrics() PrometheusMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	totalReqs := atomic.LoadUint64(&m.TotalRequests)
-	totalErrs := atomic.LoadUint64(&m.TotalErrors)
-	totalRetries := atomic.LoadUint64(&m.TotalRetries)
+	totalReqs := uint64(m.TotalRequests.Load())
+	totalErrs := uint64(m.TotalErrors.Load())
+	totalRetries := uint64(m.TotalRetries.Load())
 
 	uptime := time.Since(m.startTime).Seconds()
 	var avgRespTime float64
@@ -353,8 +365,8 @@ func (m *Metrics) PrometheusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Response-latency histogram (seconds) with cumulative buckets.
-	histCount := atomic.LoadUint64(&m.histCount)
-	histSum := float64(atomic.LoadUint64(&m.histSumNanos)) / 1e9
+	histCount := uint64(m.histCount.Load())
+	histSum := float64(m.histSumNanos.Load()) / 1e9
 	b.WriteString("# HELP rplb_response_latency_seconds Response latency in seconds.\n")
 	b.WriteString("# TYPE rplb_response_latency_seconds histogram\n")
 	var cumulative uint64
@@ -400,7 +412,7 @@ func (m *Metrics) PrometheusHandler(w http.ResponseWriter, r *http.Request) {
 	writeMetric("rplb_inflight_requests", "Number of requests currently being processed.", "gauge", formatFloat(float64(atomic.LoadInt64(&m.inFlight))))
 
 	// Rate-limited requests counter.
-	writeMetric("rplb_rate_limited_total", "Total number of rate-limited requests.", "counter", formatFloat(float64(atomic.LoadUint64(&m.rateLimited))))
+	writeMetric("rplb_rate_limited_total", "Total number of rate-limited requests.", "counter", formatFloat(float64(m.rateLimited.Load())))
 
 	// Scrape-time backend health gauges from the registered snapshot.
 	m.snapshotMu.RLock()
