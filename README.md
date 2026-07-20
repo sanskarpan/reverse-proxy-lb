@@ -1,5 +1,7 @@
 # Reverse Proxy & Load Balancer
 
+[![Coverage](https://img.shields.io/badge/coverage-60%25-brightgreen)](https://github.com/sanskarpan/reverse-proxy-lb/actions)
+
 A production-grade HTTP(S) reverse proxy and load balancer written from scratch in Go
 (standard library + `golang.org/x/*` only — no third-party framework). It provides
 intelligent load balancing, health checking, circuit breaking, rate limiting, TLS,

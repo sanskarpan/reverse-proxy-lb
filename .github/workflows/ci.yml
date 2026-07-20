@@ -32,6 +32,11 @@ jobs:
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
+      - name: coverage gate
+        run: |
+          pct=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${pct}%"
+          awk -v p="$pct" -v t="60" 'BEGIN { if (p+0 < t+0) { print "Coverage "$p"% below threshold "$t"%" ; exit 1 } }'
 
   staticcheck:
     name: staticcheck
