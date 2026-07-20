@@ -1,6 +1,8 @@
 package tracing
 
 import (
+	"context"
+
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
@@ -16,7 +18,7 @@ func defaultResource(serviceName string) *resource.Resource {
 	// attributes; we fall back to a minimal resource in that case so Setup
 	// never fails for a resource-detection issue.
 	r, err := resource.New(
-		nil,
+		context.TODO(),
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
 		),
