@@ -228,6 +228,22 @@ type ServerConfig struct {
 	// WatchInterval is the poll interval used when WatchConfig is enabled;
 	// defaults to 5s when WatchConfig is set and this is <= 0.
 	WatchInterval time.Duration `yaml:"watch_interval"`
+	// HTTP3 configures optional HTTP/3 (QUIC) downstream support. Disabled by
+	// default; requires TLS to be configured (QUIC mandates TLS 1.3).
+	HTTP3 HTTP3Config `yaml:"http3"`
+}
+
+// HTTP3Config configures optional HTTP/3 (QUIC) downstream support. When
+// Enabled, an additional UDP listener is started on Port (default: same as the
+// main server port) and the Alt-Svc header is injected on every response so
+// clients can upgrade. TLS must be configured; enabling HTTP/3 without TLS is
+// a validation error.
+type HTTP3Config struct {
+	// Enabled activates HTTP/3 support; requires tls.enabled to be true.
+	Enabled bool `yaml:"enabled"`
+	// Port is the UDP port the QUIC listener binds to. Defaults to the main
+	// server port when 0. Must be >= 1 when Enabled.
+	Port int `yaml:"port"`
 }
 
 // UpstreamConfig tunes the HTTP transport used to connect to backends. All
@@ -1060,6 +1076,11 @@ func Load(path string) (*Config, error) {
 	applyUpstreamDefaults(&cfg.Server.Upstream)
 	applyL4Defaults(&cfg.Server.L4)
 
+	// HTTP3: default the QUIC port to the main server port when not specified.
+	if cfg.Server.HTTP3.Port == 0 {
+		cfg.Server.HTTP3.Port = cfg.Server.Port
+	}
+
 	applyCircuitBreakerDefaults(&cfg.CircuitBreaker)
 	applyRetryDefaults(&cfg.Retry)
 
@@ -1371,6 +1392,9 @@ func (c *Config) validate() error {
 	if err := c.validateTLS(); err != nil {
 		return err
 	}
+	if err := c.validateHTTP3(); err != nil {
+		return err
+	}
 	if err := c.validateSecurity(); err != nil {
 		return err
 	}
@@ -1601,6 +1625,21 @@ func (c *Config) validateTLS() error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// validateHTTP3 enforces the HTTP/3 config contract: HTTP/3 requires TLS to be
+// configured (QUIC mandates TLS 1.3), and the port must be in range when enabled.
+func (c *Config) validateHTTP3() error {
+	if !c.Server.HTTP3.Enabled {
+		return nil
+	}
+	if !c.TLS.Enabled {
+		return fmt.Errorf("config: http3 requires tls to be configured")
+	}
+	if c.Server.HTTP3.Port < 1 || c.Server.HTTP3.Port > 65535 {
+		return fmt.Errorf("config: server.http3.port %d out of range (1-65535)", c.Server.HTTP3.Port)
 	}
 	return nil
 }

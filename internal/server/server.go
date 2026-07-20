@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -92,6 +93,11 @@ type Server struct {
 	// Non-nil only when cfg.LoadBalancer.GRPCHealth.Enabled; stopped in Stop().
 	grpcHealthSrv    *grpc.Server
 	grpcHealthServer *health.GRPCHealthServer
+
+	// h3Server is the optional HTTP/3 (QUIC) server started when
+	// cfg.Server.HTTP3.Enabled. Non-nil only after Start() has been called and
+	// TLS is configured; closed in Stop().
+	h3Server *http3.Server
 
 	// reloadMu serializes reloadConfig so a SIGHUP and a POST /reload (or two
 	// concurrent /reload requests) cannot race on s.cfg's fields.
@@ -1164,6 +1170,27 @@ func (s *Server) Start() error {
 		}
 	}
 
+	// Start HTTP/3 (QUIC) listener if configured. The Alt-Svc middleware is
+	// applied to the main handler so clients receive the upgrade advertisement
+	// on every response from the HTTPS listener too.
+	if s.cfg.Server.HTTP3.Enabled {
+		h3Handler := altSvcMiddleware(s.cfg.Server.HTTP3.Port)(s.httpServer.Handler)
+		h3srv, h3err := s.startH3(h3Handler)
+		if h3err != nil {
+			logging.Error("Failed to start HTTP/3 server", map[string]interface{}{
+				"error": h3err.Error(),
+			})
+		} else {
+			s.h3Server = h3srv
+			logging.Info("HTTP/3 server started", map[string]interface{}{
+				"port": s.cfg.Server.HTTP3.Port,
+			})
+			// Also inject Alt-Svc on the main HTTPS listener so upgrade
+			// hints reach clients before they switch to QUIC.
+			s.httpServer.Handler = h3Handler
+		}
+	}
+
 	var err error
 	if s.cfg.TLS.Enabled {
 		// Certificates (including SNI selection, mTLS client-auth, and hot
@@ -1241,6 +1268,11 @@ func (s *Server) Stop() error {
 	if s.grpcHealthSrv != nil {
 		s.grpcHealthSrv.GracefulStop()
 	}
+
+	// Shut down the HTTP/3 (QUIC) server if it was started. stopH3 is a no-op
+	// when s.h3Server is nil. Errors are logged inside stopH3; they do not
+	// prevent the main HTTP listener from being shut down.
+	stopH3(s.h3Server, timeout)
 
 	return s.httpServer.Shutdown(ctx)
 }
