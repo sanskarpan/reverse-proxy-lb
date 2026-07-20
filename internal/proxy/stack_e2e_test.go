@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+	//lint:ignore SA1019 h2c is deprecated in newer x/net but still required for Go <1.24 h2c cleartext tests
 	"golang.org/x/net/http2/h2c"
 )
 
@@ -136,6 +137,7 @@ func newH2CBackend(t *testing.T) (urlStr string, protoSeen func() string, stop f
 		io.WriteString(w, r.Proto)
 	})
 	h2s := &http2.Server{}
+	//lint:ignore SA1019 h2c.NewHandler is deprecated in newer x/net; required for cleartext HTTP/2 in Go <1.24
 	srv := &http.Server{Handler: h2c.NewHandler(h, h2s)}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
