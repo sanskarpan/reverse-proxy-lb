@@ -189,7 +189,8 @@ func TestServerTLSConfigClientAuthRequireAndVerify(t *testing.T) {
 		t.Fatal("ClientCAs is nil, want populated pool")
 	}
 	// The configured CA must be a trusted subject in the pool.
-	subjects := tc.ClientCAs.Subjects() //nolint:staticcheck // acceptable in test for verifying pool contents
+	//lint:ignore SA1019 Subjects() is deprecated but acceptable in tests to verify CA pool contents
+	subjects := tc.ClientCAs.Subjects()
 	found := false
 	for _, s := range subjects {
 		if string(s) == string(caLeaf.RawSubject) {
