@@ -137,7 +137,7 @@ first-class without breaking the base `Balancer` interface.
 | ✅ 6.7 | P2 | M | **Auth middleware** — Basic (constant-time), API-key, JWT **HS256 + RS256** (RS256 via PEM key or **JWKS** URL w/ `kid`; alg-confusion/`none`/expired/forged rejected). OAuth2/OIDC introspection still a follow-up. |
 | ✅ 6.8 | P2 | S | **IP allow/deny ACLs + method allowlist + path blocklist** (`security.acl`, trusted-proxy-aware). |
 | ✅ 6.9 | P2 | S | **CORS** middleware (`security.cors`: origins/methods/headers/credentials/max-age + preflight). |
-| 6.10 | P2 | S | **Secrets from env/Vault** — **deferred** (follow-up). |
+| ✅ 6.10 | P2 | S | **Secrets from env/Vault** — shipped via PR #116 (`internal/secrets`): `${VAR}` env expansion + `${vault:PATH#KEY}` Vault KV v2 references; undefined vars left unexpanded; mock-server tested. |
 | ✅ 6.11 | P3 | M | **OCSP stapling** — `tls.ocsp_stapling`: fetches + staples OCSP responses (`x/crypto/ocsp`), periodic refresh before `NextUpdate`, never staples revoked/unknown. |
 
 ---
@@ -151,11 +151,11 @@ first-class without breaking the base `Balancer` interface.
 | # | Priority | Effort | Item |
 |---|----------|--------|------|
 | ✅ 7.1 | P1 | M | **Richer Prometheus metrics** — latency **histogram** (`rplb_response_latency_seconds_bucket/_sum/_count`), `requests_by_class_total{class}`, `inflight_requests`, `rate_limited_total`, and scrape-time `backend_up` / `backend_circuit_state` gauges (via a snapshot callback). Hand-written text exposition, no `client_golang`. |
-| 7.2 | P1 | M | **OpenTelemetry tracing** — **deferred** (needs OTel deps). |
+| ✅ 7.2 | P1 | M | **OpenTelemetry tracing** — shipped via PR #115 (`internal/tracing`): otelhttp middleware, W3C TraceContext propagation, OTLP gRPC exporter, noop when disabled. |
 | ✅ 7.3 | P1 | S | **Request IDs** — `X-Request-ID` minted if absent, forwarded upstream + echoed on the response, in the request context + access log. |
 | ✅ 7.4 | P1 | S | **Access logs** — structured JSON line per request (method/path/status/duration/bytes/client-ip/request-id), sampled (1/N). |
 | ✅ 7.5 | P1 | S | **`net/http/pprof`** — mounted on the loopback admin mux, gated by admin auth. |
-| 7.6 | P2 | S | **Migrate to `log/slog`** — **deferred** (low value / high churn; current logger API is stable). |
+| ✅ 7.6 | P2 | S | **Migrate to `log/slog`** — shipped via PR #105 (`internal/logging/logger.go`): Logger is now a thin wrapper around `*slog.Logger`; public API unchanged; level hot-reload via `slog.LevelVar`. |
 | ✅ 7.7 | P2 | S | **Health/circuit/rate-limit event metrics** — circuit-state gauge (from the breaker), rate-limit-rejection counter, backend up/down gauge; health transitions already logged. |
 
 ---
@@ -175,7 +175,7 @@ first-class without breaking the base `Balancer` interface.
 | ✅ 8.5 | P1 | S | **Admin API** — `POST /reload` plus `GET /admin/backends`, `POST /admin/drain\|undrain\|weight\|circuit/reset` (loopback, bearer-auth). |
 | ✅ 8.6 | P2 | L | **DNS service discovery** — `discovery.dns` (A/SRV, periodic re-resolution, syncs into the live default group, never touches static backends). Consul/etcd/k8s-Endpoints still need their client libs (follow-up). |
 | ✅ 8.7 | P2 | M | **Backend draining** — `POST /admin/drain?url=` stops new traffic; runbook covers the drain→remove flow. |
-| 8.8 | P2 | S | **Per-route config live reload** — follow-up (route/canary reload still restart-required). |
+| ✅ 8.8 | P2 | S | **Per-route config live reload** — shipped via PRs #114 + #116: `Router.UpdateRoutes()` atomically swaps route table under RWMutex; `Proxy.UpdateCanaryWeight()` updates canary weight live; `reloadConfig()` diffs and applies both. |
 
 ---
 
@@ -201,10 +201,10 @@ first-class without breaking the base `Balancer` interface.
 |---|----------|--------|------|
 | ✅ 10.1 | P2 | M | **Cached healthy-backend list** — `GetHealthy()` is now cached, invalidated by a global health-epoch (bumped only on real health changes) + per-balancer generation. Hot-path result: **350 ns/960 B/4 allocs → 11 ns/0 B/0 allocs** at 64 backends, immediately reflecting health changes. (Consistent-hash `NextForKey` allocation remains a follow-up.) |
 | ✅ 10.2 | P2 | M | **Pool copy buffers** — `ReverseProxy.BufferPool` backed by a `sync.Pool` of 32 KiB buffers (per-request allocation pooling for `errCapture`/`captureWriter` still a follow-up). |
-| 10.3 | P2 | M | **Sharded / lock-free metrics** — *open* (metrics are already largely atomic; sharding is a micro-opt). |
+| ✅ 10.3 | P2 | M | **Sharded / lock-free metrics** — shipped via PR #106 (`internal/metrics/shard.go`): cache-line-padded `ShardedCounter` with GOMAXPROCS shards; hot counters converted; benchmark confirms reduced contention at high parallelism. |
 | ✅ 10.4 | P2 | S | **Benchmarks** — `internal/balancer/bench_test.go` covers RR/SWRR/P2C/least-conn/weighted-random/consistent-hash (`make bench`). |
-| 10.5 | P2 | M | **Load-test harness** — *open* (follow-up). |
-| 10.6 | P3 | M | **PGO** — *open* (needs production profiles). |
+| ✅ 10.5 | P2 | M | **Load-test harness** — shipped via PR #108 (`test/loadtest/`): proxy + fake backends, 10 goroutines × 200 req, reports p50/p95/p99; asserts ≥99% success and p99<500ms; `make loadtest`. |
+| ✅ 10.6 | P3 | M | **PGO** — shipped via PR #110 (`scripts/collect_pgo_profile.sh`, `docs/PGO.md`): `make pgo-collect` gathers 10s CPU pprof via admin endpoint; `make pgo-build` compiles with `-pgo=`. |
 
 ## 11. Testing & quality (P1) — largely shipped 2026-07-18
 
@@ -215,10 +215,10 @@ first-class without breaking the base `Balancer` interface.
 |---|----------|--------|------|
 | ✅ 11.1 | P1 | M | **In-repo integration tests** — full server-chain e2e for failover, health, rate-limit, reload, TLS/mTLS, WS, gzip, routing, canary, mirror, observability, etc. |
 | ✅ 11.2 | P1 | S | **Clock injection** — circuit, health, EWMA, slow-start, and outlier detection take injectable clocks for deterministic fast tests. |
-| 11.3 | P1 | S | **Coverage threshold gate** — CI reports coverage; a hard threshold is a follow-up. |
+| ✅ 11.3 | P1 | S | **Coverage threshold gate** — shipped via PR #111 (`.github/workflows/ci.yml`): CI fails below 60%; threshold is a workflow env var for easy ratcheting; README coverage badge added. |
 | ✅ 11.4 | P2 | M | **Fuzz tests** — `FuzzLoad` (config), `FuzzClientIP` / `FuzzParseCIDRs` (header/CIDR parsing). |
-| 11.5 | P2 | M | **Property-based distribution tests** — statistical distribution tests exist per algorithm; formal property-based is a follow-up. |
-| 11.6 | P2 | M | **Chaos suite** — fault-injection *feature* + flaky-backend e2e exist; a dedicated chaos harness is a follow-up. |
+| ✅ 11.5 | P2 | M | **Property-based distribution tests** — shipped via PR #107 (`internal/balancer/distribution_test.go`): RR uniformity (±1), weighted chi-squared, consistent-hash determinism, P2C preference, least-conn minimum; `testing/quick`, passes at `-count=3 -race`. |
+| ✅ 11.6 | P2 | M | **Chaos suite** — shipped via PR #109 (`test/chaos/`): 5 scenarios (slow/flapping/total-failure/50%-error/connection-reset); verifies circuit breaking, retry, graceful degradation; `make chaos`. |
 | ✅ 11.7 | P2 | S | **`golangci-lint` + `gosec`** — `.golangci.yml` + CI jobs (staticcheck, gosec, vet). |
 
 ---
@@ -247,7 +247,7 @@ first-class without breaking the base `Balancer` interface.
 | ✅ 13.1 | P2 | S | **Full config reference** — `docs/CONFIG.md` (every section, key fields, defaults). |
 | ✅ 13.2 | P2 | S | **Architecture + request-flow diagram** — `docs/ARCHITECTURE.md` (component overview + a mermaid middleware/selection/failover flow). |
 | ✅ 13.3 | P2 | S | **Operations runbook** — `docs/RUNBOOK.md` (deploy, reload, admin/drain, dashboards/alerts, troubleshooting). Published benchmark numbers still a follow-up. |
-| 13.4 | P2 | S | **README refresh** — ✅ done; godoc/CONTRIBUTING still a follow-up. |
+| ✅ 13.4 | P2 | S | **README refresh + godoc/CONTRIBUTING** — shipped via PR #113: every exported type/func/method has a godoc comment; `CONTRIBUTING.md` covers setup, commit style, PR conventions, and label guide. |
 | ✅ 13.5 | P2 | S | **Reconcile README with reality** — README now reflects the real algorithm list, Prometheus metrics, env vars, `/reload`, endpoints, and docker. |
 
 ---
