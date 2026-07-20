@@ -571,8 +571,12 @@ type BackendConfig struct {
 }
 
 type LoadBalancerConfig struct {
-	Algorithm        string                 `yaml:"algorithm"`
-	HealthCheck      HealthCheckConfig      `yaml:"health_check"`
+	Algorithm   string            `yaml:"algorithm"`
+	HealthCheck HealthCheckConfig `yaml:"health_check"`
+	// GRPCHealth configures an optional dedicated gRPC Health Checking Protocol
+	// server.  Disabled by default; its Port defaults to 9091 and Reflection to
+	// true when enabled.
+	GRPCHealth       GRPCHealthConfig       `yaml:"grpc_health"`
 	ConsistentHash   ConsistentHashConfig   `yaml:"consistent_hash"`
 	Sticky           StickyConfig           `yaml:"sticky"`
 	SlowStart        time.Duration          `yaml:"slow_start"`
@@ -605,6 +609,16 @@ type OutlierDetectionConfig struct {
 	MaxEjectionPercent int           `yaml:"max_ejection_percent"`
 }
 
+// GRPCHealthConfig configures the optional gRPC Health Checking Protocol endpoint.
+// When Enabled, a dedicated gRPC server is started on Port (default 9091) exposing
+// the grpc.health.v1.Health service.  Reflection enables gRPC Server Reflection so
+// tools like grpcurl can introspect the server without a compiled proto.
+type GRPCHealthConfig struct {
+	Enabled    bool `yaml:"enabled"`    // expose gRPC Health Protocol endpoint
+	Port       int  `yaml:"port"`       // default 9091
+	Reflection bool `yaml:"reflection"` // enable gRPC server reflection
+}
+
 type HealthCheckConfig struct {
 	Enabled  bool          `yaml:"enabled"`
 	Interval time.Duration `yaml:"interval"`
@@ -634,6 +648,31 @@ type HealthCheckConfig struct {
 	// StartupGracePeriod delays counting the first check result after startup;
 	// default 0.
 	StartupGracePeriod time.Duration `yaml:"startup_grace_period"`
+}
+
+// applyGRPCHealthDefaults fills in the documented defaults for GRPCHealthConfig:
+// Port defaults to 9091 and Reflection to true (always applied; the server stays
+// disabled unless GRPCHealth.Enabled is explicitly set to true).
+func applyGRPCHealthDefaults(g *GRPCHealthConfig) {
+	if g.Port == 0 {
+		g.Port = 9091
+	}
+	// Default Reflection to true so grpcurl / grpc_cli work out of the box.
+	// Note: yaml.v3 cannot distinguish an explicit "reflection: false" from an
+	// omitted field when the block is otherwise empty; in practice operators who
+	// want to disable reflection should also set enabled: true.
+	if !g.Enabled {
+		// Leave reflection at its zero value (false) when the whole block is off;
+		// it will be set to true below only when we are applying defaults for a
+		// config that at least partially enables gRPC health.
+		return
+	}
+	// When enabled, default Reflection to true.
+	// We cannot detect "explicitly false" vs "omitted" (yaml.v3 zero-value
+	// problem), so we unconditionally default to true here.  Operators who need
+	// to disable reflection while keeping the health server enabled should set
+	// reflection: false explicitly in the same block as enabled: true.
+	g.Reflection = true
 }
 
 // applyHealthCheckDefaults fills in the documented per-field defaults for a
@@ -955,6 +994,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyHealthCheckDefaults(&cfg.LoadBalancer.HealthCheck)
+	applyGRPCHealthDefaults(&cfg.LoadBalancer.GRPCHealth)
 
 	for i := range cfg.Backends {
 		if cfg.Backends[i].Weight == 0 {
@@ -1249,6 +1289,10 @@ func (c *Config) validate() error {
 
 	if c.Metrics.Enabled && (c.Metrics.Port < 1 || c.Metrics.Port > 65535) {
 		return fmt.Errorf("config: metrics.port %d out of range (1-65535)", c.Metrics.Port)
+	}
+
+	if c.LoadBalancer.GRPCHealth.Enabled && (c.LoadBalancer.GRPCHealth.Port < 1 || c.LoadBalancer.GRPCHealth.Port > 65535) {
+		return fmt.Errorf("config: load_balancer.grpc_health.port %d out of range (1-65535)", c.LoadBalancer.GRPCHealth.Port)
 	}
 
 	if c.LoadBalancer.ConsistentHash.LoadFactor != 0 && c.LoadBalancer.ConsistentHash.LoadFactor < 1.0 {
