@@ -14,6 +14,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TracingConfig configures OpenTelemetry distributed tracing.
+// When Enabled is false, a noop TracerProvider is installed so the binary
+// compiles and runs without any telemetry overhead or network dials.
+type TracingConfig struct {
+	// Enabled activates distributed tracing; default false.
+	Enabled bool `yaml:"enabled"`
+	// Exporter selects the trace exporter; currently only "otlp" is supported.
+	// Default "otlp".
+	Exporter string `yaml:"exporter"`
+	// Endpoint is the OTLP gRPC collector address (host:port).
+	// Default "localhost:4317".
+	Endpoint string `yaml:"endpoint"`
+	// SampleRate is the fraction (0.0-1.0) of traces to sample; 1.0 means
+	// sample everything. Default 1.0.
+	SampleRate float64 `yaml:"sample_rate"`
+	// ServiceName is the service.name resource attribute visible in the tracing
+	// backend. Default "rplb".
+	ServiceName string `yaml:"service_name"`
+}
+
+// Config is the top-level configuration loaded from YAML, containing all subsystem configs.
 type Config struct {
 	Server         ServerConfig         `yaml:"server"`
 	TLS            TLSConfig            `yaml:"tls"`
@@ -26,6 +47,10 @@ type Config struct {
 	Logging        LoggingConfig        `yaml:"logging"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	Compression    CompressionConfig    `yaml:"compression"`
+	// Tracing configures optional OpenTelemetry distributed tracing. Disabled
+	// by default; its per-field defaults (exporter, endpoint, sample_rate,
+	// service_name) are applied by Load().
+	Tracing TracingConfig `yaml:"tracing"`
 	// Security configures optional edge security middleware (headers, CORS, IP/
 	// method ACLs, and client authentication). Every block is opt-in and defaults
 	// to disabled, preserving current behavior.
@@ -190,6 +215,7 @@ type RouteConfig struct {
 	Backends []BackendConfig `yaml:"backends"`
 }
 
+// CompressionConfig controls gzip compression eligibility by content type and minimum body size.
 type CompressionConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// MinSize only compresses response bodies of at least this many bytes; the
@@ -200,6 +226,7 @@ type CompressionConfig struct {
 	ContentTypes []string `yaml:"content_types"`
 }
 
+// ServerConfig holds the HTTP server bind address, timeouts, TLS, and optional subsystem configs.
 type ServerConfig struct {
 	Host         string        `yaml:"host"`
 	Port         int           `yaml:"port"`
@@ -395,6 +422,24 @@ func applyDiscoveryDefaults(d *DiscoveryConfig) {
 	}
 }
 
+// applyTracingDefaults fills in the documented tracing defaults. The tracing
+// block stays disabled (Enabled=false) unless explicitly enabled; the remaining
+// fields are always defaulted so downstream consumers see sane values.
+func applyTracingDefaults(t *TracingConfig) {
+	if t.Exporter == "" {
+		t.Exporter = "otlp"
+	}
+	if t.Endpoint == "" {
+		t.Endpoint = "localhost:4317"
+	}
+	if t.SampleRate == 0 {
+		t.SampleRate = 1.0
+	}
+	if t.ServiceName == "" {
+		t.ServiceName = "rplb"
+	}
+}
+
 // applyFaultDefaults fills in the documented fault-injection defaults. When
 // enabled, an unset/invalid AbortStatus defaults to 503.
 func applyFaultDefaults(f *FaultConfig) {
@@ -417,6 +462,7 @@ var validAlgorithms = map[string]bool{
 	"ewma":                true,
 }
 
+// TLSConfig configures TLS for the downstream (client->proxy) listener.
 type TLSConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	CertFile string `yaml:"cert_file"`
@@ -571,6 +617,7 @@ var validAuthTypes = map[string]bool{
 	"jwt":    true,
 }
 
+// BackendConfig describes one upstream backend: URL, weight, connection cap, zone, tier, and optional per-backend health check.
 type BackendConfig struct {
 	URL      string `yaml:"url"`
 	Weight   int    `yaml:"weight"`
@@ -586,6 +633,7 @@ type BackendConfig struct {
 	HealthCheck *HealthCheckConfig `yaml:"health_check"`
 }
 
+// LoadBalancerConfig selects the load-balancing algorithm and tunes health checks, session affinity, and advanced wrappers.
 type LoadBalancerConfig struct {
 	Algorithm   string            `yaml:"algorithm"`
 	HealthCheck HealthCheckConfig `yaml:"health_check"`
@@ -803,6 +851,7 @@ func validateHealthCheck(hc HealthCheckConfig, label string) error {
 	return nil
 }
 
+// CircuitBreakerConfig tunes the per-backend circuit breaker (consecutive or rolling mode).
 type CircuitBreakerConfig struct {
 	Enabled          bool          `yaml:"enabled"`
 	FailureThreshold int           `yaml:"failure_threshold"`
@@ -826,6 +875,7 @@ type CircuitBreakerConfig struct {
 	TripOn []string `yaml:"trip_on"`
 }
 
+// RateLimiterConfig configures the rate limiter: algorithm, key, limits, and optional shared store.
 type RateLimiterConfig struct {
 	Enabled           bool `yaml:"enabled"`
 	RequestsPerSecond int  `yaml:"requests_per_second"`
@@ -921,6 +971,7 @@ func applyRateLimiterDefaults(rl *RateLimiterConfig) {
 	}
 }
 
+// RetryConfig controls how many times and on what errors the proxy retries a request.
 type RetryConfig struct {
 	MaxAttempts int           `yaml:"max_attempts"`
 	Backoff     string        `yaml:"backoff"`
@@ -956,11 +1007,13 @@ type HedgeConfig struct {
 	MaxExtra int           `yaml:"max_extra"`
 }
 
+// LoggingConfig selects the log level and format.
 type LoggingConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
 }
 
+// MetricsConfig enables the Prometheus/admin listener and tunes its bind address and auth.
 type MetricsConfig struct {
 	Enabled bool `yaml:"enabled"`
 	Port    int  `yaml:"port"`
@@ -972,6 +1025,7 @@ type MetricsConfig struct {
 	AuthToken string `yaml:"auth_token"`
 }
 
+// Load reads and validates the YAML config at path, applying defaults and environment overrides.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1083,6 +1137,7 @@ func Load(path string) (*Config, error) {
 
 	applyCircuitBreakerDefaults(&cfg.CircuitBreaker)
 	applyRetryDefaults(&cfg.Retry)
+	applyTracingDefaults(&cfg.Tracing)
 
 	// Apply environment overrides after defaults but before validation so
 	// overridden values are subject to the same validation as file values.
@@ -1416,6 +1471,10 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateDiscovery(); err != nil {
+		return err
+	}
+
+	if err := c.validateTracing(); err != nil {
 		return err
 	}
 
@@ -1756,6 +1815,16 @@ func (c *Config) validateRoutes() error {
 	return nil
 }
 
+// validateTracing enforces the tracing contract: SampleRate must be in [0.0,1.0].
+func (c *Config) validateTracing() error {
+	t := c.Tracing
+	if t.SampleRate < 0 || t.SampleRate > 1.0 {
+		return fmt.Errorf("config: tracing.sample_rate %.3f out of range (0.0-1.0)", t.SampleRate)
+	}
+	return nil
+}
+
+// GetAddr returns the host:port string the HTTP server listens on.
 func (c *Config) GetAddr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
