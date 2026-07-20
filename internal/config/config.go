@@ -793,6 +793,9 @@ type RateLimiterConfig struct {
 	Allowlist []string `yaml:"allowlist"`
 	// Rules are per-route overrides evaluated in order; the first match wins.
 	Rules []RateLimitRule `yaml:"rules"`
+	// SharedStore configures an optional distributed rate-limit Store (ENHANCEMENTS 4.4).
+	// When enabled, all proxy instances sharing the same store enforce a combined limit.
+	SharedStore SharedStoreConfig `yaml:"shared_store"`
 }
 
 // RateLimitRule overrides the per-key rps/burst for requests matching a route.
@@ -802,6 +805,26 @@ type RateLimitRule struct {
 	Method     string `yaml:"method"`
 	RPS        int    `yaml:"rps"`
 	Burst      int    `yaml:"burst"`
+}
+
+// SharedStoreConfig configures the optional distributed rate-limit Store that
+// enforces a combined limit across all proxy instances sharing a backend.
+type SharedStoreConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Backend selects the store implementation: "memory" (default) or "redis".
+	Backend string           `yaml:"backend"`
+	Redis   RedisStoreConfig `yaml:"redis"`
+	// Key is the shared namespace key used by the store; default "__global__".
+	Key string `yaml:"key"`
+}
+
+// RedisStoreConfig tunes the Redis connection used by a redis-backed SharedStore.
+type RedisStoreConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
+	// Prefix is prepended to every rate-limit key stored in Redis; default "rplb:rl".
+	Prefix string `yaml:"prefix"`
 }
 
 // validRateLimitAlgorithms is the set of accepted rate-limiter algorithm names.
@@ -831,6 +854,15 @@ func applyRateLimiterDefaults(rl *RateLimiterConfig) {
 	}
 	if rl.GlobalBurst <= 0 {
 		rl.GlobalBurst = rl.Burst
+	}
+	if rl.SharedStore.Backend == "" {
+		rl.SharedStore.Backend = "memory"
+	}
+	if rl.SharedStore.Key == "" {
+		rl.SharedStore.Key = "__global__"
+	}
+	if rl.SharedStore.Redis.Prefix == "" {
+		rl.SharedStore.Redis.Prefix = "rplb:rl"
 	}
 }
 
@@ -1204,6 +1236,14 @@ func (c *Config) validate() error {
 			if rule.Burst <= 0 {
 				return fmt.Errorf("config: rate_limiter.rules[%d].burst must be > 0 when enabled", i)
 			}
+		}
+	}
+	if ss := c.RateLimiter.SharedStore; ss.Enabled {
+		if ss.Backend != "memory" && ss.Backend != "redis" {
+			return fmt.Errorf("config: rate_limiter.shared_store.backend %q must be \"memory\" or \"redis\"", ss.Backend)
+		}
+		if ss.Backend == "redis" && ss.Redis.Addr == "" {
+			return fmt.Errorf("config: rate_limiter.shared_store.redis.addr is required when backend is \"redis\"")
 		}
 	}
 
