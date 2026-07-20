@@ -371,6 +371,35 @@ func (s *Server) setupLimiter() {
 	})
 	// Register per-route rules under the canonical names the middleware looks up.
 	middleware.RegisterRules(s.limiter, rl)
+
+	// Wire optional distributed rate-limit Store (ENHANCEMENTS 4.4).
+	ss := rl.SharedStore
+	if ss.Enabled {
+		switch ss.Backend {
+		case "redis":
+			rs, err := limiter.NewRedisStore(
+				ss.Redis.Addr,
+				ss.Redis.Password,
+				ss.Redis.DB,
+				ss.Redis.Prefix,
+			)
+			if err != nil {
+				logging.Error("Failed to connect to Redis rate-limit store; falling back to memory store", map[string]interface{}{
+					"addr":  ss.Redis.Addr,
+					"error": err.Error(),
+				})
+				ms := limiter.NewMemStore()
+				s.limiter.SetStore(ms, float64(rl.RequestsPerSecond), rl.Burst, ss.Key)
+			} else {
+				s.limiter.SetStore(rs, float64(rl.RequestsPerSecond), rl.Burst, ss.Key)
+			}
+		default:
+			// "memory" or any unrecognised backend: use the in-process MemStore.
+			ms := limiter.NewMemStore()
+			s.limiter.SetStore(ms, float64(rl.RequestsPerSecond), rl.Burst, ss.Key)
+		}
+	}
+
 	s.limiter.Start()
 }
 
