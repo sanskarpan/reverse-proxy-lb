@@ -83,6 +83,7 @@ func TestRequestIDCustomHeaderName(t *testing.T) {
 }
 
 func TestRequestIDFromContextNil(t *testing.T) {
+	//lint:ignore SA1012 nil context is intentional: testing nil-safety of RequestIDFromContext
 	if got := RequestIDFromContext(nil); got != "" {
 		t.Fatalf("expected empty id for nil context, got %q", got)
 	}
