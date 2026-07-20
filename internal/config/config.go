@@ -12,7 +12,37 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"reverse-proxy-lb/internal/secrets"
 )
+
+// VaultSecretsConfig holds HashiCorp Vault connection settings used to resolve
+// ${vault:PATH#KEY} placeholders at config load time.
+type VaultSecretsConfig struct {
+	// Enabled activates Vault secret resolution; default false.
+	Enabled bool `yaml:"enabled"`
+	// Addr is the Vault server address (e.g. "https://vault.example.com:8200").
+	// Defaults to the VAULT_ADDR environment variable when empty.
+	Addr string `yaml:"addr"`
+	// Token is the Vault token used for authentication.
+	// Defaults to the VAULT_TOKEN environment variable when empty.
+	Token string `yaml:"token"`
+	// MountPath is the KV v2 secrets engine mount path; default "secret".
+	MountPath string `yaml:"mount_path"`
+	// AuthMethod selects the Vault auth method: "token" (default) or "approle".
+	AuthMethod string `yaml:"auth_method"`
+	// RoleID is the AppRole role_id (required when AuthMethod is "approle").
+	RoleID string `yaml:"role_id"`
+	// SecretID is the AppRole secret_id (required when AuthMethod is "approle").
+	SecretID string `yaml:"secret_id"`
+}
+
+// SecretsConfig is the top-level secrets configuration block. It groups the
+// optional Vault integration settings.
+type SecretsConfig struct {
+	// Vault holds the HashiCorp Vault connection and auth settings.
+	Vault VaultSecretsConfig `yaml:"vault"`
+}
 
 // TracingConfig configures OpenTelemetry distributed tracing.
 // When Enabled is false, a noop TracerProvider is installed so the binary
@@ -78,6 +108,10 @@ type Config struct {
 	// that periodically resolves targets into the default backend group. Empty by
 	// default (no discovery); per-target defaults are applied by Load().
 	Discovery DiscoveryConfig `yaml:"discovery"`
+	// Secrets configures optional secret resolution (env-var interpolation and
+	// HashiCorp Vault KV v2 lookups) applied after YAML unmarshal. Disabled by
+	// default; Vault settings are also sourced from VAULT_ADDR / VAULT_TOKEN.
+	Secrets SecretsConfig `yaml:"secrets"`
 }
 
 // CacheConfig configures an optional in-memory HTTP response cache. When Enabled,
@@ -1035,6 +1069,34 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Apply Vault defaults before env expansion so that VAULT_ADDR / VAULT_TOKEN
+	// are available as fallbacks when the YAML block is absent or empty.
+	if cfg.Secrets.Vault.MountPath == "" {
+		cfg.Secrets.Vault.MountPath = "secret"
+	}
+	if cfg.Secrets.Vault.AuthMethod == "" {
+		cfg.Secrets.Vault.AuthMethod = "token"
+	}
+	if cfg.Secrets.Vault.Addr == "" {
+		cfg.Secrets.Vault.Addr = os.Getenv("VAULT_ADDR")
+	}
+	if cfg.Secrets.Vault.Token == "" {
+		cfg.Secrets.Vault.Token = os.Getenv("VAULT_TOKEN")
+	}
+
+	// Expand env-var placeholders (${VAR} / $VAR) in sensitive string fields
+	// immediately after unmarshal so the rest of Load() and validate() see the
+	// resolved values.
+	cfg.TLS.CertFile = secrets.Expand(cfg.TLS.CertFile)
+	cfg.TLS.KeyFile = secrets.Expand(cfg.TLS.KeyFile)
+	cfg.TLS.ClientCAFile = secrets.Expand(cfg.TLS.ClientCAFile)
+	cfg.RateLimiter.SharedStore.Redis.Password = secrets.Expand(cfg.RateLimiter.SharedStore.Redis.Password)
+	cfg.Secrets.Vault.Addr = secrets.Expand(cfg.Secrets.Vault.Addr)
+	cfg.Secrets.Vault.Token = secrets.Expand(cfg.Secrets.Vault.Token)
+	for i := range cfg.Backends {
+		cfg.Backends[i].URL = secrets.Expand(cfg.Backends[i].URL)
 	}
 
 	if cfg.Server.Port == 0 {
