@@ -362,7 +362,32 @@ func TestACMEPebble(t *testing.T) {
 	}
 
 	pebbleDirectoryURL := fmt.Sprintf("https://127.0.0.1:%d/dir", acmePort)
-	waitForHTTPS(t, ctx, pebbleDirectoryURL)
+
+	// Verify Pebble is reachable. Use a 30s sub-context so we skip (not fail)
+	// if Pebble never binds — e.g. port conflict or startup crash in CI.
+	startupClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test only: Pebble self-signed
+		},
+		Timeout: 2 * time.Second,
+	}
+	startupCtx, startupCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer startupCancel()
+	for {
+		if resp, err := startupClient.Get(pebbleDirectoryURL); err == nil {
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode < 500 {
+				break
+			}
+		}
+		select {
+		case <-startupCtx.Done():
+			t.Skipf("Pebble did not serve %s within 30s; possible startup failure or port conflict — skipping.\npebble output:\n%s",
+				pebbleDirectoryURL, getPebbleOut())
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 
 	// -------------------------------------------------------------------------
 	// 4. Start the proxy's ACME challenge handler on a free port.
