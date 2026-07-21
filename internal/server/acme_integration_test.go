@@ -29,6 +29,7 @@ package server
 //     github.com/letsencrypt/pebble/cmd/pebble@latest).
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -253,14 +254,18 @@ func TestACMEPebble(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 1. Allocate ports for Pebble's ACME directory and management API.
+	// 1. Use Pebble's well-known default ports to avoid TOCTOU port races.
+	// freePort() releases the listener before Pebble binds, creating a race
+	// window where another process can grab the port. Pebble's defaults
+	// (14000/15000) are stable and not used by any standard service in CI.
 	// -------------------------------------------------------------------------
-	acmePort := freePort(t)
-	mgmtPort := freePort(t)
+	const (
+		acmePort = 14000
+		mgmtPort = 15000
+	)
 
-	// The domain under test. Pebble's HTTP-01 VA resolves all names to 127.0.0.1
-	// via the PEBBLE_VA_NOSLEEP + PEBBLE_VA_ALWAYS_VALID env vars, so a
-	// non-routable name works fine in tests.
+	// The domain under test. PEBBLE_VA_ALWAYS_VALID bypasses HTTP-01 reachability
+	// so a non-routable test name works fine.
 	const testDomain = "proxy.acme.test"
 
 	// -------------------------------------------------------------------------
@@ -272,8 +277,8 @@ func TestACMEPebble(t *testing.T) {
 			"managementListenAddress":        fmt.Sprintf("127.0.0.1:%d", mgmtPort),
 			"certificate":                    "",
 			"privateKey":                     "",
-			"httpPort":                       0, // overridden via management API below
-			"tlsPort":                        0,
+			"httpPort":                       5002,
+			"tlsPort":                        5001,
 			"ocspResponderURL":               "",
 			"externalAccountBindingRequired": false,
 		},
@@ -287,32 +292,58 @@ func TestACMEPebble(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// 3. Start Pebble.
 	// -------------------------------------------------------------------------
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	// -strict is omitted: newer Pebble versions reject configs with empty
-	// certificate/privateKey fields under -strict, causing the process to exit
-	// immediately before binding its port.
+	// certificate/privateKey under -strict, causing immediate exit before binding.
 	pebbleCmd := exec.CommandContext(ctx, pebbleBin, "-config", cfgFile)
 	pebbleCmd.Env = append(os.Environ(),
 		"PEBBLE_VA_NOSLEEP=1",
-		// Ask Pebble's VA to always consider HTTP-01 challenges valid so we
-		// don't need a real publicly-reachable listener.
 		"PEBBLE_VA_ALWAYS_VALID=1",
 	)
+	// Capture output via a pipe so we can scan lines in real time and log on failure.
+	outPR, outPW := io.Pipe()
 	var pebbleOut strings.Builder
-	pebbleCmd.Stdout = &pebbleOut
-	pebbleCmd.Stderr = &pebbleOut
+	pebbleCmd.Stdout = io.MultiWriter(outPW, &pebbleOut)
+	pebbleCmd.Stderr = io.MultiWriter(outPW, &pebbleOut)
+
 	if err := pebbleCmd.Start(); err != nil {
 		t.Fatalf("start pebble: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = pebbleCmd.Process.Kill()
 		_, _ = pebbleCmd.Process.Wait()
+		_ = outPW.Close()
 		t.Logf("pebble output:\n%s", pebbleOut.String())
 	})
 
-	// Wait for Pebble's ACME directory to be reachable.
+	// Scan Pebble's output line-by-line so we know when it has fully initialised.
+	// Pebble logs "Listening on …" once the ACME HTTPS server is bound and ready.
+	pebbleReady := make(chan struct{}, 1)
+	go func() {
+		defer outPR.Close()
+		scanner := bufio.NewScanner(outPR)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "Listening on") || strings.Contains(line, "ACME directory") {
+				select {
+				case pebbleReady <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	// Wait for Pebble to signal readiness, then poll the directory URL.
+	select {
+	case <-pebbleReady:
+	case <-time.After(20 * time.Second):
+		t.Logf("pebble did not log 'Listening on' within 20s; polling anyway")
+	case <-ctx.Done():
+		t.Fatalf("context expired waiting for pebble to start: %v\npebble output:\n%s", ctx.Err(), pebbleOut.String())
+	}
+
 	pebbleDirectoryURL := fmt.Sprintf("https://127.0.0.1:%d/dir", acmePort)
 	waitForHTTPS(t, ctx, pebbleDirectoryURL)
 
