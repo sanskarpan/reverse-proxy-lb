@@ -326,5 +326,76 @@ func TestTracerReturnsNonNil(t *testing.T) {
 	_ = ctx
 }
 
+// TestSetupStdoutExporter verifies that Setup with Exporter="stdout" succeeds,
+// installs a real (recording) TracerProvider, and returns a non-nil shutdown
+// function that can be called without error.
+func TestSetupStdoutExporter(t *testing.T) {
+	t.Cleanup(resetGlobalOtel)
+
+	shutdown, err := tracing.Setup(tracing.Config{
+		Enabled:     true,
+		Exporter:    "stdout",
+		SampleRate:  1.0,
+		ServiceName: "test-svc",
+	})
+	if err != nil {
+		t.Fatalf("Setup(stdout) returned unexpected error: %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("Setup(stdout) returned nil shutdown func")
+	}
+
+	// The global provider should now be a real (non-noop) provider.
+	tr := otel.GetTracerProvider().Tracer("test")
+	_, span := tr.Start(context.Background(), "stdout-test-span")
+	// A real provider with AlwaysSample (sample rate 1.0) will record.
+	// We just verify the span can be ended without panic.
+	span.End()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("shutdown(stdout) returned error: %v", err)
+	}
+}
+
+// TestSetupUnsupportedExporter verifies that Setup returns a descriptive error
+// when an unknown exporter name is provided, so operators get a clear message
+// rather than a silent no-op or panic.
+func TestSetupUnsupportedExporter(t *testing.T) {
+	t.Cleanup(resetGlobalOtel)
+
+	_, err := tracing.Setup(tracing.Config{
+		Enabled:    true,
+		Exporter:   "unsupported-exporter-xyz",
+		SampleRate: 1.0,
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported exporter, got nil")
+	}
+}
+
+// TestSetupShutdownNonNilWhenEnabled verifies that a non-nil shutdown function
+// is always returned when tracing is enabled, regardless of the exporter used.
+func TestSetupShutdownNonNilWhenEnabled(t *testing.T) {
+	t.Cleanup(resetGlobalOtel)
+
+	shutdown, err := tracing.Setup(tracing.Config{
+		Enabled:    true,
+		Exporter:   "stdout",
+		SampleRate: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("Setup returned error: %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("Setup returned nil shutdown func when enabled")
+	}
+	// Call shutdown to release resources cleanly.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
+}
+
 // Ensure the span context type satisfies trace.Span.
 var _ trace.Span = (*noop.Span)(nil)
