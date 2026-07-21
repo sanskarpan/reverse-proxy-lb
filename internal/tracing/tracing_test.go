@@ -309,5 +309,22 @@ func TestTracingShutdownDrainsWithoutHanging(t *testing.T) {
 	}
 }
 
+// TestTracerReturnsNonNil verifies that Tracer() returns a non-nil tracer
+// from the global provider (noop when tracing is disabled).
+func TestTracerReturnsNonNil(t *testing.T) {
+	t.Cleanup(resetGlobalOtel)
+
+	_, _ = tracing.Setup(tracing.Config{Enabled: false})
+
+	tr := tracing.Tracer()
+	if tr == nil {
+		t.Fatal("Tracer() returned nil")
+	}
+	// Should be usable even when backed by a noop provider.
+	ctx, span := tr.Start(context.Background(), "test")
+	defer span.End()
+	_ = ctx
+}
+
 // Ensure the span context type satisfies trace.Span.
 var _ trace.Span = (*noop.Span)(nil)
