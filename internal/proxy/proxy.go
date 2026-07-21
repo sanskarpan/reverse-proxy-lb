@@ -19,6 +19,7 @@ import (
 	"reverse-proxy-lb/internal/logging"
 	"reverse-proxy-lb/internal/metrics"
 	"reverse-proxy-lb/internal/netutil"
+	"reverse-proxy-lb/internal/randutil"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -181,7 +182,7 @@ func New(b balancer.Balancer, cb *circuit.CircuitBreaker, retryCfg config.RetryC
 		proxies:        make(map[string]*httputil.ReverseProxy),
 		tripOn:         toSet([]string{"connect", "timeout"}),
 		retryOn:        toSet([]string{"connect", "timeout"}),
-		rng:            rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- non-crypto canary/fault-injection selection
+		rng:            randutil.NewRand(), // #nosec G404 -- non-crypto canary/fault-injection selection
 	}
 	// A representative (host-agnostic) transport is retained on p.transport so
 	// existing introspection (and the §0 timeout-hardening test) keeps working. The
