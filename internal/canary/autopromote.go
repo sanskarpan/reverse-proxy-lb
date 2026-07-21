@@ -6,6 +6,7 @@ package canary
 import (
 	"reverse-proxy-lb/internal/config"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,15 +23,28 @@ type metricsSnapshot interface {
 	CanarySnapshot() (requests, errors int64)
 }
 
+// metricsUpdater is the subset of *metrics.Metrics used to publish canary
+// state back to the metrics layer. It is satisfied by *metrics.Metrics and
+// can be nil when metrics are disabled.
+type metricsUpdater interface {
+	SetCanaryWeight(w float64)
+	IncrCanaryRollback()
+}
+
 // AutoPromoter steps the canary weight up on each interval when the error rate
 // is acceptable, and optionally rolls it back to 0 on degradation.
 type AutoPromoter struct {
-	proxy   weightUpdater
-	metrics metricsSnapshot
-	cfg     config.AutoPromoteConfig
+	proxy      weightUpdater
+	metrics    metricsSnapshot
+	metricsUpd metricsUpdater
+	cfg        config.AutoPromoteConfig
 
 	mu            sync.Mutex
 	currentWeight int
+
+	// rollbackCount tracks how many times the promoter has rolled the canary
+	// weight back to 0 due to error-rate degradation.
+	rollbackCount atomic.Int64
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -45,6 +59,52 @@ func New(proxy weightUpdater, m metricsSnapshot, cfg config.AutoPromoteConfig) *
 		cfg:     cfg,
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
+	}
+}
+
+// WithMetricsUpdater attaches a metricsUpdater so the AutoPromoter can publish
+// canary weight and rollback counts back to the metrics layer. Call before
+// Start(). Passing nil is safe and disables metric publishing.
+func (a *AutoPromoter) WithMetricsUpdater(u metricsUpdater) {
+	a.metricsUpd = u
+}
+
+// IncrRollback increments the internal rollback counter. It is intended for
+// use by tests or external callers to simulate rollback events; step() manages
+// the production counter directly via rollbackCount.Add(1) and does NOT call
+// this method. Callers must not invoke IncrRollback() after a rollback that
+// step() has already counted, as that would double-increment the counter.
+func (a *AutoPromoter) IncrRollback() {
+	a.rollbackCount.Add(1)
+}
+
+// AutoPromoterStatus is a point-in-time snapshot of the AutoPromoter state,
+// returned by Status() and serialised as JSON by the admin endpoint.
+type AutoPromoterStatus struct {
+	Enabled       bool    `json:"enabled"`
+	CurrentWeight int     `json:"current_weight"`
+	MaxWeight     int     `json:"max_weight"`
+	StepPercent   int     `json:"step_percent"`
+	StepInterval  string  `json:"step_interval"`
+	ErrorRate     float64 `json:"error_rate"`
+	RollbackCount int64   `json:"rollback_count"`
+}
+
+// Status returns a snapshot of the current AutoPromoter state. The ErrorRate
+// field reflects the last observed rate (0 when no data has been collected yet).
+func (a *AutoPromoter) Status() AutoPromoterStatus {
+	a.mu.Lock()
+	w := a.currentWeight
+	a.mu.Unlock()
+
+	return AutoPromoterStatus{
+		Enabled:       a.cfg.Enabled,
+		CurrentWeight: w,
+		MaxWeight:     a.cfg.MaxWeightPercent,
+		StepPercent:   a.cfg.StepPercent,
+		StepInterval:  a.cfg.StepInterval.String(),
+		ErrorRate:     0, // populated lazily; see step()
+		RollbackCount: a.rollbackCount.Load(),
 	}
 }
 
@@ -94,6 +154,11 @@ func (a *AutoPromoter) step() {
 		if a.cfg.RollbackOnDegradation {
 			a.currentWeight = 0
 			a.proxy.UpdateCanaryWeight(0)
+			a.rollbackCount.Add(1)
+			if a.metricsUpd != nil {
+				a.metricsUpd.SetCanaryWeight(0)
+				a.metricsUpd.IncrCanaryRollback()
+			}
 		}
 		return
 	}
@@ -106,6 +171,9 @@ func (a *AutoPromoter) step() {
 	if next != a.currentWeight {
 		a.currentWeight = next
 		a.proxy.UpdateCanaryWeight(next)
+		if a.metricsUpd != nil {
+			a.metricsUpd.SetCanaryWeight(float64(next))
+		}
 	}
 }
 

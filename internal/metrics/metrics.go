@@ -68,6 +68,14 @@ type Metrics struct {
 	canaryMu       sync.Mutex
 	canaryRequests atomic.Int64
 	canaryErrors   atomic.Int64
+
+	// CanaryWeight is the current canary traffic weight in percent (0..100).
+	// Updated by the auto-promoter on each step.
+	CanaryWeight atomic.Int64
+
+	// CanaryRollbackTotal counts the total number of canary rollbacks triggered
+	// by the auto-promoter.
+	CanaryRollbackTotal atomic.Int64
 }
 
 // BackendGauge is a scrape-time snapshot of a single backend's health,
@@ -234,6 +242,18 @@ func (m *Metrics) CanarySnapshot() (requests, errors int64) {
 	errors = m.canaryErrors.Swap(0)
 	m.canaryMu.Unlock()
 	return requests, errors
+}
+
+// SetCanaryWeight records the current canary traffic weight (0..100 percent).
+// Called by the auto-promoter after each successful step.
+func (m *Metrics) SetCanaryWeight(w float64) {
+	m.CanaryWeight.Store(int64(w))
+}
+
+// IncrCanaryRollback increments the total canary rollback counter.
+// Called by the auto-promoter whenever it resets the canary weight to 0.
+func (m *Metrics) IncrCanaryRollback() {
+	m.CanaryRollbackTotal.Add(1)
 }
 
 // SetSnapshotFunc registers a callback invoked at scrape time to obtain
