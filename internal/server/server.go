@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"reverse-proxy-lb/internal/balancer"
+	"reverse-proxy-lb/internal/canary"
 	"reverse-proxy-lb/internal/circuit"
 	"reverse-proxy-lb/internal/config"
 	"reverse-proxy-lb/internal/discovery"
@@ -115,6 +116,10 @@ type Server struct {
 	// nil/zero when watching is disabled.
 	watchStop chan struct{}
 	watchWG   sync.WaitGroup
+
+	// autoPromoter, when non-nil, steps the canary weight up (or rolls it back)
+	// on each StepInterval. Started in Start() and stopped in Stop().
+	autoPromoter *canary.AutoPromoter
 }
 
 // New builds a Server from cfg. configPath is retained so that SIGHUP reload reads
@@ -1164,6 +1169,21 @@ func (s *Server) Start() error {
 		s.discoverer.Start()
 	}
 
+	// Start the optional canary auto-promoter. When canary is enabled and
+	// AutoPromote.Enabled is true, the promoter steps the canary weight up each
+	// StepInterval (rolling back on degradation if configured). It is stopped in
+	// Stop() before the main HTTP listener shuts down.
+	if s.cfg.Canary.Enabled && s.cfg.Canary.AutoPromote.Enabled {
+		s.autoPromoter = canary.New(s.proxy, s.metrics, s.cfg.Canary.AutoPromote)
+		logging.Info("Starting canary auto-promoter", map[string]interface{}{
+			"step_percent":        s.cfg.Canary.AutoPromote.StepPercent,
+			"step_interval":       s.cfg.Canary.AutoPromote.StepInterval.String(),
+			"max_weight_percent":  s.cfg.Canary.AutoPromote.MaxWeightPercent,
+			"error_rate_threshold": s.cfg.Canary.AutoPromote.ErrorRateThreshold,
+		})
+		s.autoPromoter.Start()
+	}
+
 	// Start the optional raw TCP (L4) proxy on its own port. Start binds the
 	// listener and serves in the background, so a bind failure surfaces
 	// synchronously here while the accept loop runs concurrently with the HTTP
@@ -1276,6 +1296,12 @@ func (s *Server) Stop() error {
 	// Stop the config file-watch goroutine (if running) before the rest of the
 	// teardown so it cannot fire a reload mid-shutdown.
 	s.stopConfigWatch()
+
+	// Stop the canary auto-promoter (if running) before other subsystems so it
+	// cannot issue a weight update mid-shutdown.
+	if s.autoPromoter != nil {
+		s.autoPromoter.Stop()
+	}
 
 	// Stop DNS discovery FIRST (before the health checkers) so no new backends are
 	// added to the balancer mid-shutdown; a resolve in flight cannot register a
