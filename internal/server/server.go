@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -95,6 +96,10 @@ type Server struct {
 	// circuitBreaker is retained (when circuit breaking is enabled) so the
 	// metrics snapshot callback can report per-backend circuit state.
 	circuitBreaker *circuit.CircuitBreaker
+	// redisSyncer, when non-nil, synchronises circuit-breaker state across
+	// replica instances via Redis. Started in Start() once all backends are
+	// registered, stopped in Stop() before other subsystems are torn down.
+	redisSyncer *circuit.RedisSyncer
 
 	// grpcHealthSrv is the optional native gRPC Health Checking Protocol server.
 	// Non-nil only when cfg.LoadBalancer.GRPCHealth.Enabled; stopped in Stop().
@@ -310,6 +315,31 @@ func (s *Server) setupProxy() {
 		})
 	}
 	s.circuitBreaker = cb
+
+	// Wire the optional distributed circuit-breaker state syncer (Bug 2).
+	// When SharedState.Enabled and a circuit breaker is active, construct a
+	// RedisSyncer so state changes propagate across replicas. The syncer's
+	// background goroutine is started in Start() after all backends are
+	// registered; it is stopped in Stop() during shutdown.
+	if cb != nil && s.cfg.CircuitBreaker.SharedState.Enabled {
+		ss := s.cfg.CircuitBreaker.SharedState
+		rc := redis.NewClient(&redis.Options{Addr: redisAddrFromURL(ss.RedisURL)})
+		adapter := circuit.NewGoRedisAdapter(rc)
+		syncer := circuit.NewRedisSyncer(cb, adapter, ss.KeyPrefix, ss.KeyTTL, ss.SyncInterval, "")
+		// Register every static backend so the syncer tracks it from the start.
+		for _, b := range s.balancer.All() {
+			if b != nil {
+				syncer.Track(b)
+			}
+		}
+		s.redisSyncer = syncer
+		logging.Info("Distributed circuit-breaker state sync enabled", map[string]interface{}{
+			"redis_url":     ss.RedisURL,
+			"sync_interval": ss.SyncInterval.String(),
+			"key_prefix":    ss.KeyPrefix,
+		})
+	}
+
 	s.proxy = proxy.New(s.balancer, cb, s.cfg.Retry, s.cfg.LoadBalancer.Algorithm, s.trusted, s.backendTLS, s.cfg.Server.Upstream)
 
 	// Apply WebSocket idle/message limits (§5.7). Opt-in: a zero-value
@@ -1363,6 +1393,12 @@ func (s *Server) Stop() error {
 		s.limiter.Stop()
 	}
 
+	// Stop the distributed circuit-breaker syncer before the health checkers so
+	// no more Redis pushes can race with shutdown (Bug 2 — syncer must be stopped).
+	if s.redisSyncer != nil {
+		s.redisSyncer.Stop()
+	}
+
 	for _, hc := range s.healthChks {
 		hc.Stop()
 	}
@@ -1759,4 +1795,17 @@ func (s *Server) GetMetrics() *metrics.Metrics {
 // GetBalancer returns the default balancer used by this server.
 func (s *Server) GetBalancer() balancer.Balancer {
 	return s.balancer
+}
+
+// redisAddrFromURL extracts a "host:port" address from a Redis URL of the
+// form "redis://host:port" or "rediss://host:port". If the URL cannot be
+// parsed it is returned verbatim so the caller gets a descriptive dial error.
+func redisAddrFromURL(rawURL string) string {
+	// Strip the scheme prefix and return the remainder as host:port.
+	for _, prefix := range []string{"redis://", "rediss://"} {
+		if len(rawURL) > len(prefix) && rawURL[:len(prefix)] == prefix {
+			return rawURL[len(prefix):]
+		}
+	}
+	return rawURL
 }
