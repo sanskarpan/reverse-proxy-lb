@@ -145,6 +145,12 @@ const retryBudgetFloor = 10
 // errCapture carries the upstream transport error out of the ReverseProxy ErrorHandler.
 type errCapture struct{ err error }
 
+// errCapturePool reduces per-request heap allocations for errCapture structs.
+var errCapturePool = sync.Pool{New: func() any { return &errCapture{} }}
+
+// captureWriterPool reduces per-request heap allocations for captureWriter structs.
+var captureWriterPool = sync.Pool{New: func() any { return &captureWriter{} }}
+
 // bufferPool is a shared httputil.BufferPool: a sync.Pool of 32 KiB copy buffers
 // reused across proxied requests to cut per-request allocations on the streaming
 // hot path (ENHANCEMENTS §10.2).
@@ -847,8 +853,14 @@ func (p *Proxy) doRequest(w http.ResponseWriter, r *http.Request, backend *balan
 		return err, "connect", false, 0
 	}
 
-	ec := &errCapture{}
-	cw := &captureWriter{ResponseWriter: w, ws: &p.websocket}
+	ec := errCapturePool.Get().(*errCapture)
+	ec.err = nil
+	cw := captureWriterPool.Get().(*captureWriter)
+	*cw = captureWriter{ResponseWriter: w, ws: &p.websocket}
+	defer func() {
+		errCapturePool.Put(ec)
+		captureWriterPool.Put(cw)
+	}()
 
 	// Per-try timeout (opt-in): bound each attempt with its own deadline derived
 	// from the client's context, so a slow backend attempt is abandoned and
@@ -1243,8 +1255,14 @@ func (p *Proxy) doHedgeAttempt(ctx context.Context, r *http.Request, backend *ba
 		return err, "connect", false, 0
 	}
 
-	ec := &errCapture{}
-	cw := &captureWriter{ResponseWriter: rec}
+	ec := errCapturePool.Get().(*errCapture)
+	ec.err = nil
+	cw := captureWriterPool.Get().(*captureWriter)
+	*cw = captureWriter{ResponseWriter: rec}
+	defer func() {
+		errCapturePool.Put(ec)
+		captureWriterPool.Put(cw)
+	}()
 
 	attemptCtx := context.WithValue(ctx, errCtxKey, ec)
 	var cancel context.CancelFunc
