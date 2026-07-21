@@ -984,7 +984,7 @@ func (p *Proxy) proxyFor(backend *balancer.Backend) (*httputil.ReverseProxy, err
 	rp.BufferPool = bufferPool
 
 	orig := rp.Director                      //lint:ignore SA1019 Director is functional; Rewrite migration deferred to avoid behaviour change
-	rp.Director = func(req *http.Request) { //lint:ignore SA1019
+	rp.Director = func(req *http.Request) { //lint:ignore SA1019 same rationale as line above
 		orig(req) // sets scheme/host/path and (in ServeHTTP) appends X-Forwarded-For
 		req.Host = target.Host
 		req.Header.Set("X-Real-IP", netutil.ClientIP(req, p.trusted))

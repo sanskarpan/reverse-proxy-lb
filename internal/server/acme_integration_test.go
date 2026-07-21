@@ -41,6 +41,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,10 +304,13 @@ func TestACMEPebble(t *testing.T) {
 		"PEBBLE_VA_ALWAYS_VALID=1",
 	)
 	// Capture output via a pipe so we can scan lines in real time and log on failure.
+	// pebbleOut is only written by the scanner goroutine and read after synchronisation
+	// (cleanup runs after test completion); the mutex guards the race-detector.
 	outPR, outPW := io.Pipe()
+	var pebbleMu sync.Mutex
 	var pebbleOut strings.Builder
-	pebbleCmd.Stdout = io.MultiWriter(outPW, &pebbleOut)
-	pebbleCmd.Stderr = io.MultiWriter(outPW, &pebbleOut)
+	pebbleCmd.Stdout = outPW
+	pebbleCmd.Stderr = outPW
 
 	if err := pebbleCmd.Start(); err != nil {
 		t.Fatalf("start pebble: %v", err)
@@ -315,7 +319,10 @@ func TestACMEPebble(t *testing.T) {
 		_ = pebbleCmd.Process.Kill()
 		_, _ = pebbleCmd.Process.Wait()
 		_ = outPW.Close()
-		t.Logf("pebble output:\n%s", pebbleOut.String())
+		pebbleMu.Lock()
+		out := pebbleOut.String()
+		pebbleMu.Unlock()
+		t.Logf("pebble output:\n%s", out)
 	})
 
 	// Scan Pebble's output line-by-line so we know when it has fully initialised.
@@ -326,6 +333,10 @@ func TestACMEPebble(t *testing.T) {
 		scanner := bufio.NewScanner(outPR)
 		for scanner.Scan() {
 			line := scanner.Text()
+			pebbleMu.Lock()
+			pebbleOut.WriteString(line)
+			pebbleOut.WriteByte('\n')
+			pebbleMu.Unlock()
 			if strings.Contains(line, "Listening on") || strings.Contains(line, "ACME directory") {
 				select {
 				case pebbleReady <- struct{}{}:
@@ -335,13 +346,19 @@ func TestACMEPebble(t *testing.T) {
 		}
 	}()
 
+	getPebbleOut := func() string {
+		pebbleMu.Lock()
+		defer pebbleMu.Unlock()
+		return pebbleOut.String()
+	}
+
 	// Wait for Pebble to signal readiness, then poll the directory URL.
 	select {
 	case <-pebbleReady:
 	case <-time.After(20 * time.Second):
 		t.Logf("pebble did not log 'Listening on' within 20s; polling anyway")
 	case <-ctx.Done():
-		t.Fatalf("context expired waiting for pebble to start: %v\npebble output:\n%s", ctx.Err(), pebbleOut.String())
+		t.Fatalf("context expired waiting for pebble to start: %v\npebble output:\n%s", ctx.Err(), getPebbleOut())
 	}
 
 	pebbleDirectoryURL := fmt.Sprintf("https://127.0.0.1:%d/dir", acmePort)
@@ -471,7 +488,7 @@ func TestACMEPebble(t *testing.T) {
 		}
 		select {
 		case <-dialCtx.Done():
-			t.Fatalf("tls handshake timed out after 45s; last error: %v\npebble output:\n%s", err, pebbleOut.String())
+			t.Fatalf("tls handshake timed out after 45s; last error: %v\npebble output:\n%s", err, getPebbleOut())
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
