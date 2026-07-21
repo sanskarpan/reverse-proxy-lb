@@ -22,7 +22,6 @@ theme:
   name: material
   features:
     - navigation.sections
-    - navigation.tabs
     - navigation.top
     - navigation.tracking
     - navigation.expand
@@ -52,7 +51,11 @@ markdown_extensions:
       permalink: true
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.inlinehilite
   - pymdownx.details
   - pymdownx.tabbed:

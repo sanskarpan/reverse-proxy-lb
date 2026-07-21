@@ -10,19 +10,13 @@ Running rplb as a sidecar container gives each application pod its own local pro
 
 ## Sidecar architecture
 
-```
-┌─────────────────────────── Pod ─────────────────────────────┐
-│                                                              │
-│  ┌──────────────┐   localhost   ┌──────────────────────────┐ │
-│  │   app        │──────────────►│  rplb sidecar            │ │
-│  │  :8080       │               │  :9000 (outbound proxy)  │ │
-│  └──────────────┘               │  :9090 (admin)           │ │
-│                                 └──────────┬───────────────┘ │
-│                                            │                  │
-└────────────────────────────────────────────┼──────────────────┘
-                                             │ (to upstream backends in cluster)
-                                             ▼
-                                    http://backend-svc:8000
+```mermaid
+flowchart LR
+    subgraph POD["Pod"]
+        direction LR
+        APP["app container\n:8080"] -->|localhost| RPLB["rplb sidecar\n:9000 outbound proxy\n:9090 admin"]
+    end
+    RPLB --> UP["upstream backends\nhttp://backend-svc:8000"]
 ```
 
 The application forwards all outbound traffic to `localhost:9000` (rplb sidecar). rplb handles backend discovery, load balancing, retries, circuit breaking, and TLS termination.
@@ -200,8 +194,10 @@ subjects:
 
 For the reverse direction — terminating mTLS from callers before the app container — configure the sidecar on the inbound path:
 
-```
-Caller ──(mTLS)──► rplb sidecar :8443 ──(HTTP)──► app :8080
+```mermaid
+flowchart LR
+    CALLER([Caller]) -->|mTLS| RPLB["rplb sidecar :8443"]
+    RPLB -->|HTTP| APP["app container :8080"]
 ```
 
 ```yaml

@@ -69,20 +69,24 @@ docker run -p 8080:8080 -p 9090:9090 \
 
 ## Architecture
 
-```
-                   ┌──────── admin plane :9090 (loopback) ─────────┐
-                   │  /metrics  /healthz  /readyz  /reload           │
-                   │  /admin/backends  /debug/pprof                  │
-                   └────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    ADMIN["admin plane :9090 (loopback)<br/>/metrics  /healthz  /readyz  /reload<br/>/admin/backends  /debug/pprof"]
 
-  ┌────────┐       ┌──────────────────────────────────────────┐       ┌──────────┐
-  │        │       │          middleware chain                 │       │backend-1 │
-  │ client │──────►│ Recover → Auth → RateLimit → Cache → Gzip│──────►│backend-2 │
-  │        │       │         → Proxy (retry + hedge)          │       │backend-3 │
-  └────────┘       └──────────────────────────────────────────┘       └──────────┘
-                                    │                 ▲
-                          balancer selection    health checker
-                          circuit breaker       discovery (DNS/k8s)
+    C([client]) -->|data plane :8080| MW
+
+    subgraph MW["middleware chain"]
+        direction LR
+        R[Recover] --> AU[Auth] --> RL[RateLimit] --> CA[Cache] --> GZ[Gzip] --> P[Proxy]
+    end
+
+    P --> B1[backend-1]
+    P --> B2[backend-2]
+    P --> B3[backend-3]
+
+    P -.->|selection| BAL["balancer + circuit breaker"]
+    HC["health checker<br/>discovery DNS/k8s"] -.-> BAL
+    ADMIN -.-> MW
 ```
 
 The full middleware order is:

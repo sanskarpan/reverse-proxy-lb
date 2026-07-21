@@ -6,21 +6,14 @@ rplb supports OpenTelemetry (OTel) distributed tracing via the `otelhttp` middle
 
 ## Architecture
 
-```
-Client request
-  │
-  ▼ (incoming W3C traceparent header extracted, or new trace started)
-otelhttp middleware  ──── span: "rplb.proxy"
-  │                           attributes: http.method, http.url, http.status_code
-  │                           span events: retry attempts, hedge issued
-  ▼
-Upstream backend
-  │ (traceparent header injected into upstream request)
-  ▼
-Response
-  │
-  ▼ (span finished, exported via OTLP gRPC)
-OTLP Collector / Jaeger / Tempo
+```mermaid
+flowchart TD
+    C([client request]) -->|W3C traceparent extracted\nor new trace started| OT
+    OT["otelhttp middleware<br/>span: rplb.proxy<br/>attrs: method · url · status · backend · attempt"]
+    OT -->|traceparent injected| BE([upstream backend])
+    BE --> R([response])
+    R -->|span finished| EX["OTLP gRPC export"]
+    EX --> J["OTLP Collector / Jaeger / Tempo"]
 ```
 
 ---

@@ -39,21 +39,15 @@ With 10 replicas and `failure_threshold=5`, the backend receives up to 49 failur
 
 ### Architecture
 
-```
-Request arrives
-    │
-    ▼
-Local circuit state (in-memory atomic) ──► Allow or Reject
-    │
-    │ (on state change: failure counted, circuit opened/closed)
-    ▼
-Async update goroutine ──► Redis HSET rplb:circuit:<backend> state/count/ts
-    ▲
-    │
-Sync goroutine (every sync_interval) ──► Redis HGETALL
-    │
-    ▼
-Merge remote state into local state
+```mermaid
+flowchart TD
+    REQ([request]) --> LOCAL["local circuit state\nin-memory atomic"]
+    LOCAL -->|allow / reject| RESP([response])
+    LOCAL -->|on state change| ASYNC["async update goroutine"]
+    ASYNC --> REDIS[("Redis\nHSET rplb:circuit:&lt;backend&gt;")]
+    SYNC["sync goroutine\nevery sync_interval"] --> REDIS
+    REDIS --> MERGE["merge remote state\ninto local state"]
+    MERGE --> LOCAL
 ```
 
 ### State representation in Redis

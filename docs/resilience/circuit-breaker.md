@@ -6,27 +6,19 @@ The circuit breaker prevents cascading failures by stopping traffic to unhealthy
 
 ## States
 
-```
-                        failure_threshold
-                        reached
-  ┌───────────┐         ─────────────────►   ┌──────────┐
-  │           │                               │          │
-  │  CLOSED   │                               │   OPEN   │
-  │ (normal)  │◄──────────────────────────────│(no traffic)│
-  │           │   success_threshold reached   │          │
-  └───────────┘   in half-open                └────┬─────┘
-                                                   │
-                                                   │ after timeout
-                                                   ▼
-                                             ┌─────────────┐
-                                             │  HALF-OPEN  │
-                                             │ (probe only) │
-                                             └─────────────┘
-                                                   │
-                                          ┌────────┴──────────┐
-                                    success              failure
-                                    ▼                         ▼
-                                 CLOSED                    OPEN
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> CLOSED
+
+    CLOSED --> OPEN : failure_threshold reached
+    OPEN --> HALF_OPEN : timeout expires
+    HALF_OPEN --> CLOSED : success_threshold reached
+    HALF_OPEN --> OPEN : probe failure
+
+    CLOSED : CLOSED\n(normal traffic)
+    OPEN : OPEN\n(no traffic — failover)
+    HALF_OPEN : HALF-OPEN\n(single probe allowed)
 ```
 
 | State | Behavior |
