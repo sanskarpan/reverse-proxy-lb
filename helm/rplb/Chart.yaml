@@ -1,0 +1,11 @@
+apiVersion: v2
+name: rplb
+description: A high-performance reverse proxy and load balancer
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - proxy
+  - load-balancer
+  - ingress
+home: https://github.com/sanskarpan/reverse-proxy-lb

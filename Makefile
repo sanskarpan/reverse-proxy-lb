@@ -1,4 +1,4 @@
-.PHONY: build test test-race cover bench run run-backends stop-backends lint fmt vet tidy docker compose clean all
+.PHONY: build test test-race integration-test cover bench run run-backends stop-backends lint fmt vet tidy docker compose clean all
 
 build:
 	go build -o bin/proxy ./cmd/proxy/
@@ -10,6 +10,12 @@ test:
 
 test-race:
 	go test -race -count=1 ./...
+
+# Run ACME integration tests using a local Pebble ACME test server.
+# Requires pebble binary: go install github.com/letsencrypt/pebble/cmd/pebble@latest
+# Set PEBBLE_PATH to the pebble binary path, or ensure it is on PATH.
+integration-test:
+	go test -tags=integration -race -count=1 -timeout 120s ./internal/server/... -run TestACME
 
 cover:
 	go test -covermode=atomic -coverprofile=coverage.out ./...

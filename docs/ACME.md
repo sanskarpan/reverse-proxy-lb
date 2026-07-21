@@ -87,3 +87,13 @@ restart:
 
     rm -rf /var/cache/rplb/acme/*
     proxy --config configs/config.acme.yaml
+
+## Integration Testing with Pebble
+
+[Pebble](https://github.com/letsencrypt/pebble) is a lightweight ACME test server.
+To run the full ACME integration test locally:
+
+1. Install Pebble: `go install github.com/letsencrypt/pebble/cmd/pebble@latest`
+2. Run: `make integration-test` or `PEBBLE_PATH=$(which pebble) go test -tags=integration ./internal/server/...`
+
+Note: The test skips automatically if pebble is not installed.
