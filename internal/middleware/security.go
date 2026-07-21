@@ -608,7 +608,7 @@ func jwkToRSA(nB64, eB64 string) (*rsa.PublicKey, error) {
 	}
 	return &rsa.PublicKey{
 		N: new(big.Int).SetBytes(nBytes),
-		E: int(e),
+		E: int(e), // #nosec G115 -- RSA public exponent always fits in int (typically 65537)
 	}, nil
 }
 
