@@ -32,6 +32,10 @@ type ConsistentHash struct {
 	ringMap map[uint32]*Backend // hash -> backend
 	ringKey string              // membership signature the current ring was built for
 	rng     *rand.Rand
+
+	// seenPool caches a []bool scratch slice (len == number of healthy backends)
+	// to avoid a per-call map[*Backend]bool allocation inside NextForKey.
+	seenPool sync.Pool
 }
 
 // NewConsistentHash builds a bounded-load consistent-hash balancer. replicas is
@@ -129,18 +133,47 @@ func (c *ConsistentHash) NextForKey(key string) (*Backend, error) {
 	// Walk clockwise from the key's position, choosing the first backend under
 	// capacity. If every backend is at capacity (all equally saturated), fall
 	// back to the first one on the ring so we never fail to place the key.
+	//
+	// Use a pooled []bool indexed by healthy-slice position instead of a
+	// per-call map[*Backend]bool to eliminate the allocation on the hot path.
+	n := len(healthy)
+	var rawSeen []bool
+	if v := c.seenPool.Get(); v != nil {
+		rawSeen = v.([]bool)
+	}
+	if cap(rawSeen) < n {
+		rawSeen = make([]bool, n)
+	}
+	rawSeen = rawSeen[:n]
+	for i := range rawSeen {
+		rawSeen[i] = false
+	}
+	defer c.seenPool.Put(rawSeen)
+
+	// backendIdx returns the position of b in healthy, or -1 if absent.
+	// Linear search is O(n) but backend counts are typically < 50 so this
+	// is faster in practice than a map lookup (no alloc, cache-friendly).
+	backendIdx := func(b *Backend) int {
+		for i, h := range healthy {
+			if h == b {
+				return i
+			}
+		}
+		return -1
+	}
+
 	var fallback *Backend
-	seen := make(map[*Backend]bool, len(healthy))
-	for n := 0; n < len(c.ring); n++ {
-		idx := (start + n) % len(c.ring)
+	for i := 0; i < len(c.ring); i++ {
+		idx := (start + i) % len(c.ring)
 		b := c.ringMap[c.ring[idx]]
 		if fallback == nil {
 			fallback = b
 		}
-		if seen[b] {
+		bi := backendIdx(b)
+		if bi < 0 || rawSeen[bi] {
 			continue
 		}
-		seen[b] = true
+		rawSeen[bi] = true
 		if b.GetActiveConns() < capacity {
 			b.IncrConn()
 			return b, nil
