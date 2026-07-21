@@ -1,0 +1,56 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/sanskarpan/reverse-proxy-lb
+  pullPolicy: IfNotPresent
+  tag: ""  # Overrides appVersion
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+  metricsPort: 9090
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+config:
+  # Inline config.yaml content; mounted as /etc/rplb/config.yaml
+  server:
+    host: 0.0.0.0
+    port: 8080
+  load_balancer:
+    algorithm: round_robin
+  discovery:
+    kubernetes:
+      enabled: true
+      namespace: default
+      service: my-backend
+      port_name: http
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -44,7 +44,7 @@ func NewShardedCounter() *ShardedCounter {
 // that no shared state is needed — each goroutine independently hashes into
 // a shard without any CAS or lock.
 func (c *ShardedCounter) Add(delta int64) {
-	idx := localrand() % uint32(len(c.shards))
+	idx := localrand() % uint32(len(c.shards)) // #nosec G115 -- shard count is a small constant
 	atomic.AddInt64(&c.shards[idx].n, delta)
 }
 

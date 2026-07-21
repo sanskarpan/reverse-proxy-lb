@@ -30,7 +30,7 @@ func NewBackend(cfg config.BackendConfig) *Backend {
 		Zone:     cfg.Zone,
 		Tier:     cfg.Tier,
 	}
-	b.weight.Store(int32(cfg.Weight))
+	b.weight.Store(int32(cfg.Weight)) // #nosec G115 -- weight is a small positive int; overflow impossible in practice
 	b.healthy.Store(true)
 	return b
 }
@@ -40,7 +40,7 @@ func NewBackend(cfg config.BackendConfig) *Backend {
 func (b *Backend) GetWeight() int { return int(b.weight.Load()) }
 
 // SetWeight updates the backend's weight. Safe for concurrent use.
-func (b *Backend) SetWeight(w int) { b.weight.Store(int32(w)) }
+func (b *Backend) SetWeight(w int) { b.weight.Store(int32(w)) } // #nosec G115
 
 // IsHealthy reports whether the backend is currently eligible to serve traffic.
 func (b *Backend) IsHealthy() bool {

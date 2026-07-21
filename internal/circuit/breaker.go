@@ -96,6 +96,11 @@ type backendState struct {
 	successes        int
 	halfOpenInFlight int
 	lastFailure      time.Time
+	// closedAt records when the circuit last transitioned to StateClosed from
+	// StateHalfOpen (i.e. a successful recovery). The distributed syncer uses
+	// this to skip remote OPEN entries that are older than our last recovery,
+	// preventing a stale remote entry from blocking local recovery (Bug 3).
+	closedAt time.Time
 
 	// rolling-mode sliding window, kept as a ring of fixed-duration buckets.
 	buckets []bucket
@@ -255,6 +260,7 @@ func (c *CircuitBreaker) RecordSuccess(backend *balancer.Backend) {
 			state.failures = 0
 			state.successes = 0
 			state.halfOpenInFlight = 0
+			state.closedAt = c.now() // record recovery time for distributed sync (Bug 3)
 			c.resetWindow(state)
 			backend.SetHealthy(true)
 		}
@@ -395,4 +401,17 @@ func (c *CircuitBreaker) Reset(backend *balancer.Backend) {
 	defer c.mu.Unlock()
 
 	delete(c.backendStates, backend)
+}
+
+// GetClosedAt returns the Unix timestamp (seconds) when the circuit for backend
+// last transitioned from StateHalfOpen to StateClosed (i.e., recovered). It
+// returns 0 if the circuit has never recovered. Used by RedisSyncer to determine
+// whether a remote replica's OPEN entry predates the local recovery (Bug 3).
+func (c *CircuitBreaker) GetClosedAt(backend *balancer.Backend) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if st, ok := c.backendStates[backend]; ok {
+		return st.closedAt.Unix()
+	}
+	return 0
 }

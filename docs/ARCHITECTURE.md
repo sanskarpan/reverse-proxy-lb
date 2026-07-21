@@ -2,13 +2,14 @@
 
 ## Component overview
 
-```
-                        ┌──────────────────────── admin plane (loopback / :9090, bearer-auth) ─────────┐
-                        │  /metrics  /metrics.json  /healthz  /readyz  /reload  /admin/*  /debug/pprof  │
-                        └───────────────────────────────────────────────────────────────────────────────┘
- client ── data plane (:8080) ─►  http.Server ─► middleware chain ─► Proxy ─► balancer ─► upstream backends
-                                                                       │            │
-                                                       circuit breaker ┘   health checker / discovery
+```mermaid
+flowchart LR
+    C([client]) -->|data plane :8080| HS[http.Server] --> MW[middleware chain] --> P[Proxy] --> BAL[balancer] --> UB([upstream backends])
+
+    CB["circuit breaker"] -.- P
+    HC["health checker / discovery"] -.-> BAL
+
+    ADMIN["admin plane :9090 (loopback, bearer-auth)<br/>/metrics /metrics.json /healthz /readyz<br/>/reload /admin/* /debug/pprof"] -.-> HS
 ```
 
 ## Request flow (data plane)

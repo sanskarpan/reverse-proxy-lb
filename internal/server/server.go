@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -41,11 +42,6 @@ const (
 	// maxRequestBodyBytes caps client request bodies (10 MiB) to blunt memory-
 	// exhaustion attacks; oversized bodies fail with http.MaxBytesError.
 	maxRequestBodyBytes = 10 << 20
-	// readHeaderTimeout bounds how long a client may take to send request headers,
-	// mitigating slowloris-style attacks.
-	readHeaderTimeout = 10 * time.Second
-	// maxHeaderBytes caps total request header size (1 MiB).
-	maxHeaderBytes = 1 << 20
 )
 
 // Server is the central coordinator: it wires together the proxy, balancer, middleware chain, health checkers, and optional TLS, metrics, and gRPC health servers.
@@ -88,9 +84,17 @@ type Server struct {
 	// flow through the same live balancer (and health checkers) as static backends.
 	// nil when no discovery targets are configured.
 	discoverer *discovery.Discoverer
+	// k8sDiscoverer, when Kubernetes Endpoints discovery is enabled, watches a k8s
+	// Endpoints object via the REST API and syncs backends into the DEFAULT balancer
+	// group.  nil when Kubernetes discovery is disabled.
+	k8sDiscoverer k8sStarter
 	// circuitBreaker is retained (when circuit breaking is enabled) so the
 	// metrics snapshot callback can report per-backend circuit state.
 	circuitBreaker *circuit.CircuitBreaker
+	// redisSyncer, when non-nil, synchronises circuit-breaker state across
+	// replica instances via Redis. Started in Start() once all backends are
+	// registered, stopped in Stop() before other subsystems are torn down.
+	redisSyncer *circuit.RedisSyncer
 
 	// grpcHealthSrv is the optional native gRPC Health Checking Protocol server.
 	// Non-nil only when cfg.LoadBalancer.GRPCHealth.Enabled; stopped in Stop().
@@ -173,15 +177,34 @@ func (s *Server) setupL4Proxy() {
 	s.l4Proxy = tcpproxy.NewProxy(s.balancer, s.cfg.Server.L4.DialTimeout)
 }
 
+// k8sDiscoverer is the optional Kubernetes Endpoints service-discovery
+// controller.  It is started and stopped alongside the DNS discoverer.
+// Stored as an interface so the server package does not import the discovery
+// implementation type directly.
+type k8sStarter interface {
+	Start()
+	Stop()
+}
+
 // setupDiscovery constructs the DNS service-discovery controller when discovery
 // targets are configured. It syncs into the DEFAULT balancer group (s.balancer)
 // using the stdlib resolver. When no targets are configured, s.discoverer stays
 // nil and discovery is a no-op. Must run after setupBalancer.
+// It also wires up Kubernetes Endpoints discovery when that block is enabled.
 func (s *Server) setupDiscovery() {
-	if len(s.cfg.Discovery.DNS) == 0 {
-		return
+	if len(s.cfg.Discovery.DNS) > 0 {
+		s.discoverer = discovery.NewDiscoverer(s.balancer, s.cfg.Discovery.DNS, discovery.NewResolver())
 	}
-	s.discoverer = discovery.NewDiscoverer(s.balancer, s.cfg.Discovery.DNS, discovery.NewResolver())
+	if s.cfg.Discovery.Kubernetes.Enabled {
+		kd, err := discovery.NewKubernetesDiscovery(s.cfg.Discovery.Kubernetes, s.balancer)
+		if err != nil {
+			logging.Error("Failed to initialize Kubernetes service discovery; skipping", map[string]interface{}{
+				"error": err.Error(),
+			})
+		} else {
+			s.k8sDiscoverer = kd
+		}
+	}
 }
 
 func (s *Server) setupBalancer() {
@@ -287,6 +310,31 @@ func (s *Server) setupProxy() {
 		})
 	}
 	s.circuitBreaker = cb
+
+	// Wire the optional distributed circuit-breaker state syncer (Bug 2).
+	// When SharedState.Enabled and a circuit breaker is active, construct a
+	// RedisSyncer so state changes propagate across replicas. The syncer's
+	// background goroutine is started in Start() after all backends are
+	// registered; it is stopped in Stop() during shutdown.
+	if cb != nil && s.cfg.CircuitBreaker.SharedState.Enabled {
+		ss := s.cfg.CircuitBreaker.SharedState
+		rc := redis.NewClient(&redis.Options{Addr: redisAddrFromURL(ss.RedisURL)})
+		adapter := circuit.NewGoRedisAdapter(rc)
+		syncer := circuit.NewRedisSyncer(cb, adapter, ss.KeyPrefix, ss.KeyTTL, ss.SyncInterval, "")
+		// Register every static backend so the syncer tracks it from the start.
+		for _, b := range s.balancer.All() {
+			if b != nil {
+				syncer.Track(b)
+			}
+		}
+		s.redisSyncer = syncer
+		logging.Info("Distributed circuit-breaker state sync enabled", map[string]interface{}{
+			"redis_url":     ss.RedisURL,
+			"sync_interval": ss.SyncInterval.String(),
+			"key_prefix":    ss.KeyPrefix,
+		})
+	}
+
 	s.proxy = proxy.New(s.balancer, cb, s.cfg.Retry, s.cfg.LoadBalancer.Algorithm, s.trusted, s.backendTLS, s.cfg.Server.Upstream)
 
 	// Apply WebSocket idle/message limits (§5.7). Opt-in: a zero-value
@@ -458,6 +506,8 @@ func (s *Server) setupMetrics() {
 	s.metricsMux.HandleFunc("/admin/undrain", auth(s.handleAdminUndrain))
 	s.metricsMux.HandleFunc("/admin/weight", auth(s.handleAdminWeight))
 	s.metricsMux.HandleFunc("/admin/circuit/reset", auth(s.handleAdminCircuitReset))
+	//   GET  /admin/canary/status -> JSON snapshot of the auto-promoter state
+	s.metricsMux.HandleFunc("/admin/canary/status", auth(s.handleAdminCanaryStatus))
 
 	// Liveness/readiness probes for orchestrators (k8s, load balancers). These are
 	// intentionally UNauthenticated and served on the admin listener, separate from
@@ -759,6 +809,27 @@ func (s *Server) handleAdminCircuitReset(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleAdminCanaryStatus serves GET /admin/canary/status. When no
+// auto-promoter is configured it responds with {"enabled":false}; otherwise it
+// encodes the full AutoPromoterStatus snapshot as JSON.
+func (s *Server) handleAdminCanaryStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.autoPromoter == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"enabled":false}`))
+		return
+	}
+	status := s.autoPromoter.Status()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, "encode error", http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) setupHealthCheck() {
 	// Run one HealthChecker per balancer group so every routed group's backends
 	// are probed independently. The default group's overrides come from the
@@ -885,7 +956,7 @@ func (s *Server) setupHTTPServer() {
 	// unchanged. Wrapping order below is applied inside-out, yielding this
 	// outer->inner request flow around the stack built above:
 	//
-	//   Recover -> SecurityHeaders -> CORS -> ACL -> Auth -> MaxBytes -> ...
+	//   Recover -> SecurityHeaders -> CORS -> ACL -> Auth -> OIDCIntrospect -> MaxBytes -> ...
 	//
 	// ACL and Auth run early so unauthorized/blocked requests are rejected
 	// before any proxying or body reading; SecurityHeaders and CORS sit
@@ -893,8 +964,18 @@ func (s *Server) setupHTTPServer() {
 	// including those short-circuited by Auth/ACL.
 	sec := s.cfg.Security
 
-	// Auth is innermost of the security block so it runs just before MaxBytes/
-	// proxy but after ACL has admitted the client.
+	// OIDCIntrospect is the innermost of the auth block: it validates Bearer
+	// tokens via RFC 7662 after JWT/basic/apikey auth has already passed. It must
+	// be applied first (innermost) so that Auth, applied next, becomes the outer
+	// (first-executing) wrapper. Execution order is Auth → OIDCIntrospect → proxy.
+	// When Auth type is "none" and only OIDC introspection is configured, it acts
+	// as the sole auth gate and the Auth wrapper is absent.
+	if sec.Auth.OIDCIntrospection.Enabled {
+		handler = middleware.OIDCIntrospect(sec.Auth.OIDCIntrospection)(handler)
+	}
+
+	// Auth sits just outside OIDCIntrospect so it runs first: a request that
+	// fails JWT/basic/apikey auth is rejected before the introspection round-trip.
 	if authEnabled(sec.Auth) {
 		handler = middleware.Auth(sec.Auth)(handler)
 	}
@@ -1169,12 +1250,23 @@ func (s *Server) Start() error {
 		s.discoverer.Start()
 	}
 
+	// Start Kubernetes Endpoints service discovery (if configured) before serving
+	// so discovered backends are available as the listener comes up.
+	if s.k8sDiscoverer != nil {
+		logging.Info("Starting Kubernetes Endpoints service discovery", map[string]interface{}{
+			"namespace": s.cfg.Discovery.Kubernetes.Namespace,
+			"service":   s.cfg.Discovery.Kubernetes.Service,
+		})
+		s.k8sDiscoverer.Start()
+	}
+
 	// Start the optional canary auto-promoter. When canary is enabled and
 	// AutoPromote.Enabled is true, the promoter steps the canary weight up each
 	// StepInterval (rolling back on degradation if configured). It is stopped in
 	// Stop() before the main HTTP listener shuts down.
 	if s.cfg.Canary.Enabled && s.cfg.Canary.AutoPromote.Enabled {
 		s.autoPromoter = canary.New(s.proxy, s.metrics, s.cfg.Canary.AutoPromote)
+		s.autoPromoter.WithMetricsUpdater(s.metrics)
 		logging.Info("Starting canary auto-promoter", map[string]interface{}{
 			"step_percent":         s.cfg.Canary.AutoPromote.StepPercent,
 			"step_interval":        s.cfg.Canary.AutoPromote.StepInterval.String(),
@@ -1310,8 +1402,20 @@ func (s *Server) Stop() error {
 		s.discoverer.Stop()
 	}
 
+	// Stop Kubernetes Endpoints discovery alongside DNS discovery, for the same
+	// reason: no new backends should be registered mid-shutdown.
+	if s.k8sDiscoverer != nil {
+		s.k8sDiscoverer.Stop()
+	}
+
 	if s.limiter != nil {
 		s.limiter.Stop()
+	}
+
+	// Stop the distributed circuit-breaker syncer before the health checkers so
+	// no more Redis pushes can race with shutdown (Bug 2 — syncer must be stopped).
+	if s.redisSyncer != nil {
+		s.redisSyncer.Stop()
 	}
 
 	for _, hc := range s.healthChks {
@@ -1710,4 +1814,17 @@ func (s *Server) GetMetrics() *metrics.Metrics {
 // GetBalancer returns the default balancer used by this server.
 func (s *Server) GetBalancer() balancer.Balancer {
 	return s.balancer
+}
+
+// redisAddrFromURL extracts a "host:port" address from a Redis URL of the
+// form "redis://host:port" or "rediss://host:port". If the URL cannot be
+// parsed it is returned verbatim so the caller gets a descriptive dial error.
+func redisAddrFromURL(rawURL string) string {
+	// Strip the scheme prefix and return the remainder as host:port.
+	for _, prefix := range []string{"redis://", "rediss://"} {
+		if len(rawURL) > len(prefix) && rawURL[:len(prefix)] == prefix {
+			return rawURL[len(prefix):]
+		}
+	}
+	return rawURL
 }

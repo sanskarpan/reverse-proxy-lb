@@ -1,0 +1,100 @@
+site_name: RPLB — Go Reverse Proxy & Load Balancer
+site_description: >-
+  A production-grade reverse proxy and load balancer in Go — zero-alloc hot paths,
+  distributed circuit breaking, OIDC auth, Kubernetes discovery, and canary auto-promote.
+site_author: sanskarpan
+site_url: https://sanskarpan.github.io/reverse-proxy-lb/
+repo_url: https://github.com/sanskarpan/reverse-proxy-lb
+repo_name: sanskarpan/reverse-proxy-lb
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+validation:
+  nav:
+    omitted_files: info
+    not_found: warn
+  links:
+    not_found: ignore
+    anchors: ignore
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.expand
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - Algorithms:
+      - Overview: algorithms/index.md
+      - Consistent Hash: algorithms/consistent-hash.md
+      - Power of Two Choices: algorithms/p2c.md
+  - Resilience:
+      - Circuit Breaker: resilience/circuit-breaker.md
+      - Retry & Hedging: resilience/retry-hedging.md
+      - Rate Limiting: resilience/rate-limiting.md
+      - Admission Ceiling: resilience/admission.md
+  - Security:
+      - TLS & ACME: security/tls-acme.md
+      - JWT & OIDC Auth: security/auth.md
+      - Hardening: security/hardening.md
+  - Operations:
+      - Canary Deployments: ops/canary.md
+      - Kubernetes: ops/kubernetes.md
+      - Metrics: ops/metrics.md
+      - Distributed Tracing: ops/tracing.md
+      - Runbook: ops/runbook.md
+  - Cookbook:
+      - Blue/Green Deploy: cookbook/blue-green.md
+      - Canary Rollout: cookbook/canary-rollout.md
+      - WebSocket Proxying: cookbook/websocket.md
+      - Kubernetes Sidecar: cookbook/k8s-sidecar.md
+  - Design:
+      - ADR 001 — Zero-Alloc Hot Path: adr/001-zero-alloc-hotpath.md
+      - ADR 002 — crypto/rand Seeding: adr/002-crypto-rand-seed.md
+      - ADR 003 — Distributed Circuit Breaker: adr/003-distributed-circuit-breaker.md
+      - ADR 004 — Bounded-Load Consistent Hash: adr/004-bounded-load-consistent-hash.md
+  - Contributing: contributing.md

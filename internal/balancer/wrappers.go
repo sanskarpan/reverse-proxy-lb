@@ -102,7 +102,7 @@ func hashPick(candidates []*Backend, key string) (*Backend, error) {
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
-	b := candidates[h.Sum32()%uint32(len(candidates))]
+	b := candidates[h.Sum32()%uint32(len(candidates))] // #nosec G115 -- len always fits in uint32
 	b.IncrConn()
 	return b, nil
 }

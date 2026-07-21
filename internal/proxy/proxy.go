@@ -983,8 +983,8 @@ func (p *Proxy) proxyFor(backend *balancer.Backend) (*httputil.ReverseProxy, err
 	// body-streaming hot path (§10.2).
 	rp.BufferPool = bufferPool
 
-	orig := rp.Director
-	rp.Director = func(req *http.Request) {
+	orig := rp.Director                      //lint:ignore SA1019 Director is functional; Rewrite migration deferred to avoid behaviour change
+	rp.Director = func(req *http.Request) { //lint:ignore SA1019
 		orig(req) // sets scheme/host/path and (in ServeHTTP) appends X-Forwarded-For
 		req.Host = target.Host
 		req.Header.Set("X-Real-IP", netutil.ClientIP(req, p.trusted))

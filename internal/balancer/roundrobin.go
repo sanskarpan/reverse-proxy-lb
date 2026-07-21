@@ -21,7 +21,7 @@ func (r *RoundRobin) Next() (*Backend, error) {
 	}
 
 	index := atomic.AddUint32(&r.current, 1) - 1
-	selected := healthy[index%uint32(len(healthy))]
+	selected := healthy[index%uint32(len(healthy))] // #nosec G115 -- len always fits in uint32
 	// Reserve the connection slot at selection time so callers see an accurate
 	// in-flight count. The caller releases it via DecrConn when the request ends.
 	selected.IncrConn()

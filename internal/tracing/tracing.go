@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -66,10 +67,25 @@ func Setup(cfg Config) (shutdown func(context.Context) error, err error) {
 		tp = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exp),
 			sdktrace.WithSampler(sampler),
-			sdktrace.WithResource(defaultResource(cfg.ServiceName)),
+			sdktrace.WithResource(defaultResource(context.Background(), cfg.ServiceName)),
 		)
+
+	case "stdout":
+		// stdout exports human-readable JSON spans to os.Stdout. Useful for
+		// local development and smoke-testing without a collector running.
+		exp, expErr := stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if expErr != nil {
+			return nil, fmt.Errorf("tracing: failed to create stdout exporter: %w", expErr)
+		}
+		sampler := sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRate))
+		tp = sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exp),
+			sdktrace.WithSampler(sampler),
+			sdktrace.WithResource(defaultResource(context.Background(), cfg.ServiceName)),
+		)
+
 	default:
-		return nil, fmt.Errorf("tracing: unsupported exporter %q (supported: otlp)", cfg.Exporter)
+		return nil, fmt.Errorf("tracing: unsupported exporter %q (supported: otlp, stdout)", cfg.Exporter)
 	}
 
 	// Install as global provider so any library instrumentation (e.g. otelhttp)

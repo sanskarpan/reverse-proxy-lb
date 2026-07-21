@@ -57,7 +57,7 @@ func NewHealthChecker(b balancer.Balancer, cfg config.HealthCheckConfig, overrid
 		},
 		cfg:       cfg,
 		overrides: overrides,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:       rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- jitter does not require crypto-strength randomness
 		stopCh:    make(chan struct{}),
 	}
 }

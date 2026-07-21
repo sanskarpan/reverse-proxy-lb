@@ -10,7 +10,11 @@ import (
 // defaultResource builds an OTel Resource that identifies this service. The
 // service.name attribute is the primary grouping key in most backends
 // (Jaeger, Grafana Tempo, etc.).
-func defaultResource(serviceName string) *resource.Resource {
+//
+// ctx is forwarded to resource.New so that callers can pass a cancellable or
+// deadline-bound context. Pass context.Background() when there is no
+// tighter scope available.
+func defaultResource(ctx context.Context, serviceName string) *resource.Resource {
 	if serviceName == "" {
 		serviceName = "rplb"
 	}
@@ -18,7 +22,7 @@ func defaultResource(serviceName string) *resource.Resource {
 	// attributes; we fall back to a minimal resource in that case so Setup
 	// never fails for a resource-detection issue.
 	r, err := resource.New(
-		context.TODO(),
+		ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
 		),

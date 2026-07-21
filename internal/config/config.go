@@ -132,11 +132,36 @@ type CacheConfig struct {
 	Methods []string `yaml:"methods"`
 }
 
-// DiscoveryConfig configures optional dynamic backend discovery. Currently only
-// DNS-based discovery is supported; each DNSTarget is resolved periodically into
-// the default backend group. Empty by default.
+// DiscoveryConfig configures optional dynamic backend discovery.  DNS-based
+// discovery resolves targets periodically into the default backend group.
+// Kubernetes-based discovery watches an Endpoints object via the k8s REST API.
+// Empty by default.
 type DiscoveryConfig struct {
-	DNS []DNSTarget `yaml:"dns"`
+	DNS        []DNSTarget               `yaml:"dns"`
+	Kubernetes KubernetesDiscoveryConfig `yaml:"kubernetes"`
+}
+
+// KubernetesDiscoveryConfig configures Kubernetes Endpoints-based service
+// discovery.  When Enabled, the proxy watches the named Endpoints object in
+// Namespace and adds/removes backends as ready addresses change.  No client-go
+// is required: the k8s REST API is called directly over net/http.
+type KubernetesDiscoveryConfig struct {
+	// Enabled activates Kubernetes Endpoints discovery; default false.
+	Enabled bool `yaml:"enabled"`
+	// Namespace is the k8s namespace containing the Endpoints object; required when Enabled.
+	Namespace string `yaml:"namespace"`
+	// Service is the name of the Service (and its Endpoints object); required when Enabled.
+	Service string `yaml:"service"`
+	// PortName selects the named port from each Endpoints subset.
+	// When empty, the first port in each subset is used.
+	PortName string `yaml:"port_name"`
+	// Kubeconfig is the path to a kubeconfig YAML file for out-of-cluster auth.
+	// When empty, in-cluster ServiceAccount credentials are used
+	// (/var/run/secrets/kubernetes.io/serviceaccount/).
+	Kubeconfig string `yaml:"kubeconfig"`
+	// ResyncPeriod is the interval between full re-lists of the Endpoints object
+	// (in addition to the continuous watch).  Default 30s.
+	ResyncPeriod string `yaml:"resync_period"`
 }
 
 // DNSTarget describes a single DNS name resolved periodically into backends in
@@ -542,6 +567,18 @@ func applyTracingDefaults(t *TracingConfig) {
 	}
 }
 
+// applyOIDCIntrospectionDefaults fills in the documented OIDC introspection
+// defaults: CacheTTL 30s and CacheSize 1000. The block stays disabled unless
+// explicitly enabled; the remaining fields are always defaulted.
+func applyOIDCIntrospectionDefaults(o *OIDCIntrospectionConfig) {
+	if o.CacheTTL <= 0 {
+		o.CacheTTL = 30 * time.Second
+	}
+	if o.CacheSize <= 0 {
+		o.CacheSize = 1000
+	}
+}
+
 // applyFaultDefaults fills in the documented fault-injection defaults. When
 // enabled, an unset/invalid AbortStatus defaults to 503.
 func applyFaultDefaults(f *FaultConfig) {
@@ -702,6 +739,33 @@ type AuthConfig struct {
 	// JWKSURL is a JWKS endpoint from which RSA public keys are fetched to verify
 	// RS256 JWTs. For RS256, exactly one of JWTPublicKey or JWKSURL must be set.
 	JWKSURL string `yaml:"jwks_url"`
+	// OIDCIntrospection configures optional RFC 7662 token introspection middleware.
+	// When Enabled, Bearer tokens are validated via the IntrospectionURL endpoint
+	// using client_credentials Basic auth. Disabled by default.
+	OIDCIntrospection OIDCIntrospectionConfig `yaml:"oidc_introspection"`
+}
+
+// OIDCIntrospectionConfig configures RFC 7662 token introspection. When Enabled,
+// Bearer tokens are validated by POSTing to IntrospectionURL with client_credentials
+// Basic auth. Responses are cached to avoid a round-trip on every request.
+type OIDCIntrospectionConfig struct {
+	// Enabled activates OIDC/OAuth2 token introspection; default false.
+	Enabled bool `yaml:"enabled"`
+	// IntrospectionURL is the RFC 7662 token introspection endpoint (required when Enabled).
+	IntrospectionURL string `yaml:"introspection_url"`
+	// ClientID is the OAuth2 client identifier used for Basic auth to the endpoint.
+	ClientID string `yaml:"client_id"`
+	// ClientSecret is the OAuth2 client secret used for Basic auth to the endpoint.
+	ClientSecret string `yaml:"client_secret"`
+	// CacheTTL is how long a positive (active) introspection result is cached;
+	// default 30s (capped at the token's exp when shorter).
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// CacheSize is the maximum number of token results held in the LRU cache;
+	// default 1000.
+	CacheSize int `yaml:"cache_size"`
+	// ScopesRequired lists scopes that must all be present in the token's scope
+	// claim. An empty list skips scope enforcement.
+	ScopesRequired []string `yaml:"scopes_required"`
 }
 
 // validClientAuth is the set of accepted downstream ClientAuth modes.
@@ -896,6 +960,16 @@ func applyCircuitBreakerDefaults(cb *CircuitBreakerConfig) {
 	if len(cb.TripOn) == 0 {
 		cb.TripOn = []string{"connect", "timeout"}
 	}
+	// SharedState defaults — only applied when not explicitly set.
+	if cb.SharedState.SyncInterval <= 0 {
+		cb.SharedState.SyncInterval = 1 * time.Second
+	}
+	if cb.SharedState.KeyPrefix == "" {
+		cb.SharedState.KeyPrefix = "rplb:cb"
+	}
+	if cb.SharedState.KeyTTL <= 0 {
+		cb.SharedState.KeyTTL = 30 * time.Second
+	}
 }
 
 // applyRetryDefaults fills in the documented retry defaults.
@@ -953,6 +1027,27 @@ func validateHealthCheck(hc HealthCheckConfig, label string) error {
 	return nil
 }
 
+// CircuitSharedStateConfig configures distributed circuit-breaker state sharing
+// across replica instances via Redis. When Enabled, each replica periodically
+// pushes its local circuit state to Redis and reads other replicas' states. If
+// any replica reports OPEN for a backend, the local circuit opens immediately.
+// On Redis failure the proxy continues with local state only.
+type CircuitSharedStateConfig struct {
+	// Enabled activates distributed circuit-breaker state sharing; default false.
+	Enabled bool `yaml:"enabled"`
+	// RedisURL is the Redis connection URL (e.g. "redis://localhost:6379");
+	// required when Enabled.
+	RedisURL string `yaml:"redis_url"`
+	// SyncInterval is how often local state is pushed to Redis and remote state
+	// is pulled; default 1s.
+	SyncInterval time.Duration `yaml:"sync_interval"`
+	// KeyPrefix is prepended to every Redis key; default "rplb:cb".
+	KeyPrefix string `yaml:"key_prefix"`
+	// KeyTTL is the Redis key TTL; state older than this is considered stale and
+	// ignored. Default 30s.
+	KeyTTL time.Duration `yaml:"key_ttl"`
+}
+
 // CircuitBreakerConfig tunes the per-backend circuit breaker (consecutive or rolling mode).
 type CircuitBreakerConfig struct {
 	Enabled          bool          `yaml:"enabled"`
@@ -975,6 +1070,9 @@ type CircuitBreakerConfig struct {
 	// accounting: a subset of {"connect","timeout","5xx"}; default
 	// {"connect","timeout"}.
 	TripOn []string `yaml:"trip_on"`
+	// SharedState configures optional distributed circuit-breaker state sharing
+	// via Redis. Disabled by default; its per-field defaults are applied by Load().
+	SharedState CircuitSharedStateConfig `yaml:"shared_state"`
 }
 
 // RateLimiterConfig configures the rate limiter: algorithm, key, limits, and optional shared store.
@@ -1129,7 +1227,7 @@ type MetricsConfig struct {
 
 // Load reads and validates the YAML config at path, applying defaults and environment overrides.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is a CLI-provided config file path, not user input
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -1163,6 +1261,8 @@ func Load(path string) (*Config, error) {
 	cfg.RateLimiter.SharedStore.Redis.Password = secrets.Expand(cfg.RateLimiter.SharedStore.Redis.Password)
 	cfg.Secrets.Vault.Addr = secrets.Expand(cfg.Secrets.Vault.Addr)
 	cfg.Secrets.Vault.Token = secrets.Expand(cfg.Secrets.Vault.Token)
+	cfg.Security.Auth.OIDCIntrospection.ClientID = secrets.Expand(cfg.Security.Auth.OIDCIntrospection.ClientID)
+	cfg.Security.Auth.OIDCIntrospection.ClientSecret = secrets.Expand(cfg.Security.Auth.OIDCIntrospection.ClientSecret)
 	for i := range cfg.Backends {
 		cfg.Backends[i].URL = secrets.Expand(cfg.Backends[i].URL)
 	}
@@ -1266,6 +1366,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Security.Auth.JWTAlg == "" {
 		cfg.Security.Auth.JWTAlg = "HS256"
 	}
+	applyOIDCIntrospectionDefaults(&cfg.Security.Auth.OIDCIntrospection)
 
 	applyUpstreamDefaults(&cfg.Server.Upstream)
 	applyL4Defaults(&cfg.Server.L4)
@@ -1872,6 +1973,18 @@ func (c *Config) validateSecurity() error {
 			}
 		default:
 			return fmt.Errorf("config: security.auth.jwt_alg %q must be \"HS256\" or \"RS256\"", c.Security.Auth.JWTAlg)
+		}
+	}
+	if oidc := c.Security.Auth.OIDCIntrospection; oidc.Enabled {
+		if oidc.IntrospectionURL == "" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url is required when oidc_introspection.enabled is true")
+		}
+		u, err := url.Parse(oidc.IntrospectionURL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url %q is not a valid URL", oidc.IntrospectionURL)
+		}
+		if u.Scheme != "https" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url %q must use https (RFC 7662 §2.1 requires TLS)", oidc.IntrospectionURL)
 		}
 	}
 	for i, entry := range c.Security.ACL.Allow {

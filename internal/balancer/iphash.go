@@ -23,7 +23,7 @@ func (i *IPHash) NextForIP(ip string) (*Backend, error) {
 	h.Write([]byte(ip))
 	hash := h.Sum32()
 
-	index := hash % uint32(len(healthy))
+	index := hash % uint32(len(healthy)) // #nosec G115 -- len always fits in uint32
 	selected := healthy[index]
 	selected.IncrConn()
 	return selected, nil

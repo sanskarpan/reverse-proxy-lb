@@ -68,6 +68,14 @@ type Metrics struct {
 	canaryMu       sync.Mutex
 	canaryRequests atomic.Int64
 	canaryErrors   atomic.Int64
+
+	// CanaryWeight is the current canary traffic weight in percent (0..100).
+	// Updated by the auto-promoter on each step.
+	CanaryWeight atomic.Int64
+
+	// CanaryRollbackTotal counts the total number of canary rollbacks triggered
+	// by the auto-promoter.
+	CanaryRollbackTotal atomic.Int64
 }
 
 // BackendGauge is a scrape-time snapshot of a single backend's health,
@@ -236,6 +244,18 @@ func (m *Metrics) CanarySnapshot() (requests, errors int64) {
 	return requests, errors
 }
 
+// SetCanaryWeight records the current canary traffic weight (0..100 percent).
+// Called by the auto-promoter after each successful step.
+func (m *Metrics) SetCanaryWeight(w float64) {
+	m.CanaryWeight.Store(int64(w))
+}
+
+// IncrCanaryRollback increments the total canary rollback counter.
+// Called by the auto-promoter whenever it resets the canary weight to 0.
+func (m *Metrics) IncrCanaryRollback() {
+	m.CanaryRollbackTotal.Add(1)
+}
+
 // SetSnapshotFunc registers a callback invoked at scrape time to obtain
 // per-backend up/circuit-state gauges. Passing nil clears it.
 func (m *Metrics) SetSnapshotFunc(fn func() []BackendGauge) {
@@ -263,9 +283,9 @@ func (m *Metrics) GetPrometheusMetrics() PrometheusMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	totalReqs := uint64(m.TotalRequests.Load())
-	totalErrs := uint64(m.TotalErrors.Load())
-	totalRetries := uint64(m.TotalRetries.Load())
+	totalReqs := uint64(m.TotalRequests.Load())    // #nosec G115 -- counters are always non-negative
+	totalErrs := uint64(m.TotalErrors.Load())     // #nosec G115
+	totalRetries := uint64(m.TotalRetries.Load()) // #nosec G115
 
 	uptime := time.Since(m.startTime).Seconds()
 	var avgRespTime float64
@@ -405,7 +425,7 @@ func (m *Metrics) PrometheusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Response-latency histogram (seconds) with cumulative buckets.
-	histCount := uint64(m.histCount.Load())
+	histCount := uint64(m.histCount.Load()) // #nosec G115 -- histogram count is always non-negative
 	histSum := float64(m.histSumNanos.Load()) / 1e9
 	b.WriteString("# HELP rplb_response_latency_seconds Response latency in seconds.\n")
 	b.WriteString("# TYPE rplb_response_latency_seconds histogram\n")
