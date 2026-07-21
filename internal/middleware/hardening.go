@@ -43,18 +43,24 @@ func Recover(next http.Handler) http.Handler {
 }
 
 // MaxBytes returns middleware that limits the size of request bodies to limit
-// bytes using http.MaxBytesReader. Reads beyond the limit fail with an error
-// (and, since Go 1.19, a *http.MaxBytesError), letting handlers reject
-// oversized payloads instead of buffering them.
+// bytes. It rejects immediately with 413 when the Content-Length header
+// advertises a body that exceeds the limit (fast path, no body read required)
+// and wraps r.Body with http.MaxBytesReader for streaming bodies that don't
+// declare Content-Length or that understate it.
 //
-// The body is only wrapped when r.Body is non-nil, so bodyless requests
-// (GET, HEAD, ...) are unaffected. The ResponseWriter is not wrapped, and
-// WebSocket upgrades are unaffected because they operate on the hijacked
-// connection rather than r.Body. A non-positive limit disables the check.
+// The body is only checked when r.Body is non-nil, so bodyless requests
+// (GET, HEAD, ...) are unaffected. WebSocket upgrades are unaffected because
+// they operate on the hijacked connection rather than r.Body. A non-positive
+// limit disables the check.
 func MaxBytes(limit int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if limit > 0 && r.Body != nil {
+				// Fast-path: reject before reading if Content-Length already exceeds limit.
+				if r.ContentLength > limit {
+					http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+					return
+				}
 				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 			next.ServeHTTP(w, r)
