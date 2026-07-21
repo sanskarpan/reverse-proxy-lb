@@ -132,11 +132,36 @@ type CacheConfig struct {
 	Methods []string `yaml:"methods"`
 }
 
-// DiscoveryConfig configures optional dynamic backend discovery. Currently only
-// DNS-based discovery is supported; each DNSTarget is resolved periodically into
-// the default backend group. Empty by default.
+// DiscoveryConfig configures optional dynamic backend discovery.  DNS-based
+// discovery resolves targets periodically into the default backend group.
+// Kubernetes-based discovery watches an Endpoints object via the k8s REST API.
+// Empty by default.
 type DiscoveryConfig struct {
-	DNS []DNSTarget `yaml:"dns"`
+	DNS        []DNSTarget               `yaml:"dns"`
+	Kubernetes KubernetesDiscoveryConfig `yaml:"kubernetes"`
+}
+
+// KubernetesDiscoveryConfig configures Kubernetes Endpoints-based service
+// discovery.  When Enabled, the proxy watches the named Endpoints object in
+// Namespace and adds/removes backends as ready addresses change.  No client-go
+// is required: the k8s REST API is called directly over net/http.
+type KubernetesDiscoveryConfig struct {
+	// Enabled activates Kubernetes Endpoints discovery; default false.
+	Enabled bool `yaml:"enabled"`
+	// Namespace is the k8s namespace containing the Endpoints object; required when Enabled.
+	Namespace string `yaml:"namespace"`
+	// Service is the name of the Service (and its Endpoints object); required when Enabled.
+	Service string `yaml:"service"`
+	// PortName selects the named port from each Endpoints subset.
+	// When empty, the first port in each subset is used.
+	PortName string `yaml:"port_name"`
+	// Kubeconfig is the path to a kubeconfig YAML file for out-of-cluster auth.
+	// When empty, in-cluster ServiceAccount credentials are used
+	// (/var/run/secrets/kubernetes.io/serviceaccount/).
+	Kubeconfig string `yaml:"kubeconfig"`
+	// ResyncPeriod is the interval between full re-lists of the Endpoints object
+	// (in addition to the continuous watch).  Default 30s.
+	ResyncPeriod string `yaml:"resync_period"`
 }
 
 // DNSTarget describes a single DNS name resolved periodically into backends in
