@@ -148,7 +148,7 @@ func (c *ConsistentHash) NextForKey(key string) (*Backend, error) {
 	for i := range rawSeen {
 		rawSeen[i] = false
 	}
-	defer c.seenPool.Put(rawSeen)
+	defer c.seenPool.Put(rawSeen) //lint:ignore SA6002 slice header is pointer-sized; amortized allocation is the goal
 
 	// backendIdx returns the position of b in healthy, or -1 if absent.
 	// Linear search is O(n) but backend counts are typically < 50 so this
