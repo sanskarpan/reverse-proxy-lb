@@ -88,6 +88,10 @@ type Server struct {
 	// flow through the same live balancer (and health checkers) as static backends.
 	// nil when no discovery targets are configured.
 	discoverer *discovery.Discoverer
+	// k8sDiscoverer, when Kubernetes Endpoints discovery is enabled, watches a k8s
+	// Endpoints object via the REST API and syncs backends into the DEFAULT balancer
+	// group.  nil when Kubernetes discovery is disabled.
+	k8sDiscoverer k8sStarter
 	// circuitBreaker is retained (when circuit breaking is enabled) so the
 	// metrics snapshot callback can report per-backend circuit state.
 	circuitBreaker *circuit.CircuitBreaker
@@ -173,15 +177,34 @@ func (s *Server) setupL4Proxy() {
 	s.l4Proxy = tcpproxy.NewProxy(s.balancer, s.cfg.Server.L4.DialTimeout)
 }
 
+// k8sDiscoverer is the optional Kubernetes Endpoints service-discovery
+// controller.  It is started and stopped alongside the DNS discoverer.
+// Stored as an interface so the server package does not import the discovery
+// implementation type directly.
+type k8sStarter interface {
+	Start()
+	Stop()
+}
+
 // setupDiscovery constructs the DNS service-discovery controller when discovery
 // targets are configured. It syncs into the DEFAULT balancer group (s.balancer)
 // using the stdlib resolver. When no targets are configured, s.discoverer stays
 // nil and discovery is a no-op. Must run after setupBalancer.
+// It also wires up Kubernetes Endpoints discovery when that block is enabled.
 func (s *Server) setupDiscovery() {
-	if len(s.cfg.Discovery.DNS) == 0 {
-		return
+	if len(s.cfg.Discovery.DNS) > 0 {
+		s.discoverer = discovery.NewDiscoverer(s.balancer, s.cfg.Discovery.DNS, discovery.NewResolver())
 	}
-	s.discoverer = discovery.NewDiscoverer(s.balancer, s.cfg.Discovery.DNS, discovery.NewResolver())
+	if s.cfg.Discovery.Kubernetes.Enabled {
+		kd, err := discovery.NewKubernetesDiscovery(s.cfg.Discovery.Kubernetes, s.balancer)
+		if err != nil {
+			logging.Error("Failed to initialize Kubernetes service discovery; skipping", map[string]interface{}{
+				"error": err.Error(),
+			})
+		} else {
+			s.k8sDiscoverer = kd
+		}
+	}
 }
 
 func (s *Server) setupBalancer() {
@@ -1179,6 +1202,16 @@ func (s *Server) Start() error {
 		s.discoverer.Start()
 	}
 
+	// Start Kubernetes Endpoints service discovery (if configured) before serving
+	// so discovered backends are available as the listener comes up.
+	if s.k8sDiscoverer != nil {
+		logging.Info("Starting Kubernetes Endpoints service discovery", map[string]interface{}{
+			"namespace": s.cfg.Discovery.Kubernetes.Namespace,
+			"service":   s.cfg.Discovery.Kubernetes.Service,
+		})
+		s.k8sDiscoverer.Start()
+	}
+
 	// Start the optional canary auto-promoter. When canary is enabled and
 	// AutoPromote.Enabled is true, the promoter steps the canary weight up each
 	// StepInterval (rolling back on degradation if configured). It is stopped in
@@ -1318,6 +1351,12 @@ func (s *Server) Stop() error {
 	// backend after the health checkers have been torn down.
 	if s.discoverer != nil {
 		s.discoverer.Stop()
+	}
+
+	// Stop Kubernetes Endpoints discovery alongside DNS discovery, for the same
+	// reason: no new backends should be registered mid-shutdown.
+	if s.k8sDiscoverer != nil {
+		s.k8sDiscoverer.Stop()
 	}
 
 	if s.limiter != nil {
