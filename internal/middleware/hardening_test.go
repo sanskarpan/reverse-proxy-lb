@@ -104,17 +104,46 @@ func TestMaxBytesRejectsOverLimit(t *testing.T) {
 	const limit = 16
 	body := strings.Repeat("a", limit+64) // well over the limit
 
-	var readErr error
-	h := MaxBytes(limit)(readAllHandler(func(n int, err error) {
-		readErr = err
+	// When Content-Length is known and exceeds the limit, the fast-path
+	// short-circuits before calling the inner handler and returns 413 directly.
+	// (httptest.NewRequest derives ContentLength from *strings.Reader.)
+	handlerCalled := false
+	h := MaxBytes(limit)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
 	}))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	h.ServeHTTP(rec, req)
 
+	if handlerCalled {
+		t.Fatal("expected handler NOT to be called when Content-Length exceeds limit")
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status %d, got %d", http.StatusRequestEntityTooLarge, rec.Code)
+	}
+}
+
+// TestMaxBytesRejectsStreamOverLimit covers the streaming case where
+// Content-Length is -1 (unknown) but the actual body exceeds the limit.
+// In this case the inner handler IS called but gets an error on Read.
+func TestMaxBytesRejectsStreamOverLimit(t *testing.T) {
+	const limit = 16
+
+	var readErr error
+	h := MaxBytes(limit)(readAllHandler(func(n int, err error) {
+		readErr = err
+	}))
+
+	rec := httptest.NewRecorder()
+	// Use an io.NopCloser-wrapped reader so Content-Length is -1 (unknown).
+	body := io.NopCloser(strings.NewReader(strings.Repeat("a", limit+64)))
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req.ContentLength = -1 // force unknown length
+	h.ServeHTTP(rec, req)
+
 	if readErr == nil {
-		t.Fatal("expected an error reading a body that exceeds the limit, got nil")
+		t.Fatal("expected an error reading a streaming body that exceeds the limit, got nil")
 	}
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected status %d, got %d", http.StatusRequestEntityTooLarge, rec.Code)

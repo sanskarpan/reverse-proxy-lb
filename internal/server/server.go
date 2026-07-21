@@ -847,7 +847,11 @@ func (s *Server) setupHTTPServer() {
 
 	// MaxBytes caps request body size early in the chain (before logging/metrics
 	// so oversized payloads are rejected without being fully read downstream).
-	handler = middleware.MaxBytes(maxRequestBodyBytes)(handler)
+	maxBody := s.cfg.Server.MaxRequestBodyBytes
+	if maxBody == 0 {
+		maxBody = maxRequestBodyBytes // fallback to hardcoded default
+	}
+	handler = middleware.MaxBytes(maxBody)(handler)
 
 	// Transform middleware (§9). Each block is opt-in and only installed when
 	// enabled, so a zero-value config leaves the chain unchanged. Wrapping is
@@ -924,10 +928,10 @@ func (s *Server) setupHTTPServer() {
 		Addr:              s.cfg.GetAddr(),
 		Handler:           handler,
 		ReadTimeout:       s.cfg.Server.ReadTimeout,
-		ReadHeaderTimeout: readHeaderTimeout,
+		ReadHeaderTimeout: s.cfg.Server.ReadHeaderTimeout,
 		WriteTimeout:      s.cfg.Server.WriteTimeout,
 		IdleTimeout:       s.cfg.Server.IdleTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
+		MaxHeaderBytes:    s.cfg.Server.MaxHeaderBytes,
 	}
 
 	// When TLS is enabled, build the server *tls.Config from the full TLS config
@@ -1112,10 +1116,10 @@ func (s *Server) Start() error {
 			Addr:              net.JoinHostPort(s.cfg.Metrics.Host, strconv.Itoa(s.cfg.Metrics.Port)),
 			Handler:           s.metricsMux,
 			ReadTimeout:       10 * time.Second,
-			ReadHeaderTimeout: readHeaderTimeout,
+			ReadHeaderTimeout: s.cfg.Server.ReadHeaderTimeout,
 			WriteTimeout:      10 * time.Second,
 			IdleTimeout:       60 * time.Second,
-			MaxHeaderBytes:    maxHeaderBytes,
+			MaxHeaderBytes:    s.cfg.Server.MaxHeaderBytes,
 		}
 		go func() {
 			logging.Info("Starting metrics server", map[string]interface{}{
@@ -1177,10 +1181,10 @@ func (s *Server) Start() error {
 			Addr:              acmeAddr,
 			Handler:           s.acmeChallengeHandler,
 			ReadTimeout:       10 * time.Second,
-			ReadHeaderTimeout: readHeaderTimeout,
+			ReadHeaderTimeout: s.cfg.Server.ReadHeaderTimeout,
 			WriteTimeout:      10 * time.Second,
 			IdleTimeout:       60 * time.Second,
-			MaxHeaderBytes:    maxHeaderBytes,
+			MaxHeaderBytes:    s.cfg.Server.MaxHeaderBytes,
 		}
 		go func() {
 			logging.Info("Starting ACME HTTP-01 challenge server", map[string]interface{}{
