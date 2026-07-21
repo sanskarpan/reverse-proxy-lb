@@ -283,7 +283,7 @@ func (m *Metrics) GetPrometheusMetrics() PrometheusMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	totalReqs := uint64(m.TotalRequests.Load())    // #nosec G115 -- counters are always non-negative
+	totalReqs := uint64(m.TotalRequests.Load())   // #nosec G115 -- counters are always non-negative
 	totalErrs := uint64(m.TotalErrors.Load())     // #nosec G115
 	totalRetries := uint64(m.TotalRetries.Load()) // #nosec G115
 

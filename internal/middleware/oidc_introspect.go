@@ -224,7 +224,7 @@ func (o *oidcIntrospector) validate(ctx context.Context, token string) (bool, er
 // the http.Client timeout fires.
 func (o *oidcIntrospector) introspect(ctx context.Context, token string) (*introspectionResponse, error) {
 	body := url.Values{
-		"token":            {token},
+		"token":           {token},
 		"token_type_hint": {"access_token"},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.IntrospectionURL, strings.NewReader(body.Encode()))

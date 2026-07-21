@@ -73,18 +73,18 @@ type k8sWatchEvent struct {
 // KubernetesDiscovery watches a Kubernetes Endpoints object via the k8s REST
 // API HTTP watch endpoint.  No client-go required: pure stdlib net/http + JSON.
 type KubernetesDiscovery struct {
-	namespace   string
-	service     string
-	portName    string
-	token       string
-	tokenFile   string // path to the token file for refreshing (in-cluster only)
-	clientCert  []byte // PEM-encoded client certificate (kubeconfig mTLS)
-	clientKey   []byte // PEM-encoded client private key (kubeconfig mTLS)
-	apiServer   string
-	caCert      []byte
-	resync      time.Duration
-	balancer    balancer.Balancer
-	scheme      string // "http" or "https" for backend URLs
+	namespace  string
+	service    string
+	portName   string
+	token      string
+	tokenFile  string // path to the token file for refreshing (in-cluster only)
+	clientCert []byte // PEM-encoded client certificate (kubeconfig mTLS)
+	clientKey  []byte // PEM-encoded client private key (kubeconfig mTLS)
+	apiServer  string
+	caCert     []byte
+	resync     time.Duration
+	balancer   balancer.Balancer
+	scheme     string // "http" or "https" for backend URLs
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -177,7 +177,7 @@ type kubeconfig struct {
 	Users []struct {
 		Name string `yaml:"name"`
 		User struct {
-			Token               string `yaml:"token"`
+			Token                 string `yaml:"token"`
 			ClientCertificateData string `yaml:"client-certificate-data"`
 			ClientKeyData         string `yaml:"client-key-data"`
 		} `yaml:"user"`

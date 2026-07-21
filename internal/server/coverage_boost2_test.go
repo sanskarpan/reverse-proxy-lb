@@ -397,20 +397,20 @@ func TestRouteGroupsEqual(t *testing.T) {
 		},
 		{
 			name: "different path prefix",
-			a: []config.RouteConfig{{PathPrefix: "/api", Algorithm: "round_robin"}},
-			b: []config.RouteConfig{{PathPrefix: "/v2", Algorithm: "round_robin"}},
+			a:    []config.RouteConfig{{PathPrefix: "/api", Algorithm: "round_robin"}},
+			b:    []config.RouteConfig{{PathPrefix: "/v2", Algorithm: "round_robin"}},
 			want: false,
 		},
 		{
 			name: "different algorithm",
-			a: []config.RouteConfig{{PathPrefix: "/api", Algorithm: "round_robin"}},
-			b: []config.RouteConfig{{PathPrefix: "/api", Algorithm: "least_connections"}},
+			a:    []config.RouteConfig{{PathPrefix: "/api", Algorithm: "round_robin"}},
+			b:    []config.RouteConfig{{PathPrefix: "/api", Algorithm: "least_connections"}},
 			want: false,
 		},
 		{
 			name: "different backends",
-			a: []config.RouteConfig{{PathPrefix: "/api", Backends: []config.BackendConfig{be1}}},
-			b: []config.RouteConfig{{PathPrefix: "/api", Backends: []config.BackendConfig{be2}}},
+			a:    []config.RouteConfig{{PathPrefix: "/api", Backends: []config.BackendConfig{be1}}},
+			b:    []config.RouteConfig{{PathPrefix: "/api", Backends: []config.BackendConfig{be2}}},
 			want: false,
 		},
 		{

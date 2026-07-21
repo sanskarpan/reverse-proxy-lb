@@ -28,12 +28,12 @@ func TestStop_WithAutoPromoter(t *testing.T) {
 
 	// Inject a canary AutoPromoter that will be stopped by Stop().
 	ap := canary.New(&mockWeightUpdater{}, &mockMetricsSnap{}, config.AutoPromoteConfig{
-		Enabled:             true,
-		StepPercent:         10,
-		MaxWeightPercent:    80,
-		ErrorRateThreshold:  0.05,
-		MinRequests:         50,
-		StepInterval:        1<<63 - 1, // effectively infinite
+		Enabled:            true,
+		StepPercent:        10,
+		MaxWeightPercent:   80,
+		ErrorRateThreshold: 0.05,
+		MinRequests:        50,
+		StepInterval:       1<<63 - 1, // effectively infinite
 	})
 	ap.Start()
 	s.autoPromoter = ap

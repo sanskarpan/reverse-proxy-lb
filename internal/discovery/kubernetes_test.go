@@ -17,9 +17,9 @@ import (
 
 // mockBalancer records Add/Remove calls for assertions.
 type mockBalancer struct {
-	mu      sync.Mutex
-	added   []string // backend URLs added
-	removed []string // backend URLs removed
+	mu       sync.Mutex
+	added    []string // backend URLs added
+	removed  []string // backend URLs removed
 	backends []*balancer.Backend
 }
 

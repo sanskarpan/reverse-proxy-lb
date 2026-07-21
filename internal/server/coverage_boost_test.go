@@ -161,10 +161,10 @@ func TestBalancerGroups_WithCanary(t *testing.T) {
 
 	cfg := baseConfig("round_robin", backendCfgs(def))
 	cfg.Canary = config.CanaryConfig{
-		Enabled:      true,
+		Enabled:       true,
 		WeightPercent: 20,
-		Algorithm:    "round_robin",
-		Backends:     backendCfgs(can),
+		Algorithm:     "round_robin",
+		Backends:      backendCfgs(can),
 	}
 	s := New(cfg, "")
 
@@ -522,10 +522,10 @@ func TestFindBackend_InCanary(t *testing.T) {
 
 	cfg := baseConfig("round_robin", backendCfgs(def))
 	cfg.Canary = config.CanaryConfig{
-		Enabled:      true,
+		Enabled:       true,
 		WeightPercent: 20,
-		Algorithm:    "round_robin",
-		Backends:     backendCfgs(can),
+		Algorithm:     "round_robin",
+		Backends:      backendCfgs(can),
 	}
 	s := New(cfg, "")
 

@@ -267,7 +267,7 @@ func TestSetupCanary_EnabledNoBackends(t *testing.T) {
 
 	cfg := baseConfig("round_robin", []config.BackendConfig{{URL: be.URL, Weight: 1}})
 	cfg.Canary = config.CanaryConfig{
-		Enabled:      true,
+		Enabled:       true,
 		WeightPercent: 20,
 		// No backends — should return early without setting s.canary.
 	}
