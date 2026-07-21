@@ -1176,9 +1176,9 @@ func (s *Server) Start() error {
 	if s.cfg.Canary.Enabled && s.cfg.Canary.AutoPromote.Enabled {
 		s.autoPromoter = canary.New(s.proxy, s.metrics, s.cfg.Canary.AutoPromote)
 		logging.Info("Starting canary auto-promoter", map[string]interface{}{
-			"step_percent":        s.cfg.Canary.AutoPromote.StepPercent,
-			"step_interval":       s.cfg.Canary.AutoPromote.StepInterval.String(),
-			"max_weight_percent":  s.cfg.Canary.AutoPromote.MaxWeightPercent,
+			"step_percent":         s.cfg.Canary.AutoPromote.StepPercent,
+			"step_interval":        s.cfg.Canary.AutoPromote.StepInterval.String(),
+			"max_weight_percent":   s.cfg.Canary.AutoPromote.MaxWeightPercent,
 			"error_rate_threshold": s.cfg.Canary.AutoPromote.ErrorRateThreshold,
 		})
 		s.autoPromoter.Start()

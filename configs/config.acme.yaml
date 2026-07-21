@@ -1,0 +1,52 @@
+# ACME / Let's Encrypt configuration for sanskarpan.xyz
+#
+# Uses Let's Encrypt STAGING environment (safe to test with — issues untrusted
+# certificates that browsers will warn about, but otherwise exercises the full
+# ACME flow without hitting production rate limits).
+#
+# Switch directory_url to the production endpoint when you are ready:
+#   https://acme-v02.api.letsencrypt.org/directory
+#
+# Prerequisites:
+#   1. DNS: add an A record pointing sanskarpan.xyz (and www.sanskarpan.xyz)
+#      to the public IP of this server.
+#   2. Firewall: TCP port 80 must be reachable from the internet so Let's
+#      Encrypt can complete the HTTP-01 challenge.
+#   3. Firewall: TCP port 443 must be open for HTTPS traffic.
+#   4. Cache directory: create /var/cache/rplb/acme and give the process write
+#      access (see docs/ACME.md for permission guidance).
+#
+# Run:
+#   proxy --config configs/config.acme.yaml
+
+server:
+  host: 0.0.0.0
+  port: 443
+  read_header_timeout: 10s
+  max_header_bytes: 65536
+
+tls:
+  enabled: true
+  acme:
+    enabled: true
+    # domains lists every hostname for which certificates are provisioned.
+    # All names must resolve to this server's public IP.
+    domains:
+      - sanskarpan.xyz
+      - www.sanskarpan.xyz
+    # cache_dir stores obtained certificates and account keys across restarts.
+    # The directory must exist and be writable by the proxy process.
+    cache_dir: /var/cache/rplb/acme
+    # directory_url selects the ACME CA.  The staging URL below is safe for
+    # testing.  Replace with the production URL when ready.
+    directory_url: https://acme-staging-v02.api.letsencrypt.org/directory
+    # http_challenge_port is the port Let's Encrypt's CA contacts to verify
+    # domain ownership.  Port 80 must be open and reachable from the internet.
+    http_challenge_port: 80
+
+backends:
+  - url: http://localhost:8080
+    weight: 1
+
+load_balancer:
+  algorithm: round_robin

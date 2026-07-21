@@ -1765,6 +1765,33 @@ tls:
 	}
 }
 
+// ACME_CACHE_DIR env var must override the cache_dir field loaded from the
+// config file, allowing container deployments to inject the cache path at
+// runtime without modifying the config file.
+func TestACMECacheDirEnvOverride(t *testing.T) {
+	path := writeConfig(t, `
+backends:
+  - url: "http://localhost:8001"
+tls:
+  enabled: true
+  acme:
+    enabled: true
+    domains: ["a.example.com"]
+    cache_dir: "/original/cache"
+    http_challenge_port: 80
+`)
+	dir := t.TempDir()
+	t.Setenv("ACME_CACHE_DIR", dir)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TLS.ACME.CacheDir != dir {
+		t.Errorf("ACME_CACHE_DIR override: got %q, want %q", cfg.TLS.ACME.CacheDir, dir)
+	}
+}
+
 // OCSPStapling must parse from YAML when set true.
 func TestOCSPStaplingParse(t *testing.T) {
 	path := writeConfig(t, `

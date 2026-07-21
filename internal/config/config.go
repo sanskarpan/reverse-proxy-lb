@@ -1308,6 +1308,7 @@ func Load(path string) (*Config, error) {
 //	RPLB_RATE_LIMIT_BURST    -> RateLimiter.Burst (int)
 //	RPLB_BACKENDS            -> replaces Backends with a comma-separated URL list,
 //	                            each backend defaulted (Weight 1, MaxConns 100)
+//	ACME_CACHE_DIR           -> TLS.ACME.CacheDir (directory for cert/key cache)
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("RPLB_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -1361,6 +1362,9 @@ func applyEnvOverrides(cfg *Config) {
 		if len(backends) > 0 {
 			cfg.Backends = backends
 		}
+	}
+	if v := os.Getenv("ACME_CACHE_DIR"); v != "" {
+		cfg.TLS.ACME.CacheDir = v
 	}
 }
 
