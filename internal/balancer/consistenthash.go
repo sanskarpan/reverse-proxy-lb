@@ -7,7 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"time"
+
+	"reverse-proxy-lb/internal/randutil"
 )
 
 // ConsistentHash implements consistent hashing with bounded loads (the
@@ -47,7 +48,7 @@ func NewConsistentHash(replicas int, loadFactor float64) *ConsistentHash {
 		replicas:   replicas,
 		loadFactor: loadFactor,
 		ringMap:    make(map[uint32]*Backend),
-		rng:        rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- non-crypto fallback key generation
+		rng:        randutil.NewRand(), // #nosec G404 -- non-crypto fallback key generation
 	}
 }
 

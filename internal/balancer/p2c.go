@@ -4,7 +4,8 @@ import (
 	"errors"
 	"math/rand"
 	"sync"
-	"time"
+
+	"reverse-proxy-lb/internal/randutil"
 )
 
 // P2C implements the power-of-two-choices least-connections algorithm. Rather
@@ -19,7 +20,7 @@ type P2C struct {
 }
 
 func NewP2C() *P2C {
-	return &P2C{rng: rand.New(rand.NewSource(time.Now().UnixNano()))} // #nosec G404 -- non-crypto load balancing selection
+	return &P2C{rng: randutil.NewRand()} // #nosec G404 -- non-crypto load balancing selection
 }
 
 func (p *P2C) Next() (*Backend, error) {
