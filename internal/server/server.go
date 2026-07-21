@@ -511,6 +511,8 @@ func (s *Server) setupMetrics() {
 	s.metricsMux.HandleFunc("/admin/undrain", auth(s.handleAdminUndrain))
 	s.metricsMux.HandleFunc("/admin/weight", auth(s.handleAdminWeight))
 	s.metricsMux.HandleFunc("/admin/circuit/reset", auth(s.handleAdminCircuitReset))
+	//   GET  /admin/canary/status -> JSON snapshot of the auto-promoter state
+	s.metricsMux.HandleFunc("/admin/canary/status", auth(s.handleAdminCanaryStatus))
 
 	// Liveness/readiness probes for orchestrators (k8s, load balancers). These are
 	// intentionally UNauthenticated and served on the admin listener, separate from
@@ -810,6 +812,27 @@ func (s *Server) handleAdminCircuitReset(w http.ResponseWriter, r *http.Request)
 		logging.Info("Circuit breaker reset via admin API", map[string]interface{}{"backend": be.URL})
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleAdminCanaryStatus serves GET /admin/canary/status. When no
+// auto-promoter is configured it responds with {"enabled":false}; otherwise it
+// encodes the full AutoPromoterStatus snapshot as JSON.
+func (s *Server) handleAdminCanaryStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.autoPromoter == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"enabled":false}`))
+		return
+	}
+	status := s.autoPromoter.Status()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, "encode error", http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) setupHealthCheck() {
@@ -1248,6 +1271,7 @@ func (s *Server) Start() error {
 	// Stop() before the main HTTP listener shuts down.
 	if s.cfg.Canary.Enabled && s.cfg.Canary.AutoPromote.Enabled {
 		s.autoPromoter = canary.New(s.proxy, s.metrics, s.cfg.Canary.AutoPromote)
+		s.autoPromoter.WithMetricsUpdater(s.metrics)
 		logging.Info("Starting canary auto-promoter", map[string]interface{}{
 			"step_percent":         s.cfg.Canary.AutoPromote.StepPercent,
 			"step_interval":        s.cfg.Canary.AutoPromote.StepInterval.String(),

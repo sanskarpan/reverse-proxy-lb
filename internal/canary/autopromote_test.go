@@ -175,3 +175,75 @@ func TestAutoPromoterStartStop(t *testing.T) {
 	ap.Stop()
 	// No panic / deadlock reaching here means the goroutine shut down cleanly.
 }
+
+// TestAutoPromoterStatus verifies that Status() returns a correctly populated
+// AutoPromoterStatus snapshot reflecting the promoter's current configuration
+// and runtime state.
+func TestAutoPromoterStatus(t *testing.T) {
+	mp := &mockProxy{}
+	mm := &mockMetrics{requests: 200, errors: 0}
+	cfg := defaultCfg()
+	cfg.StepPercent = 20
+	cfg.MaxWeightPercent = 60
+	cfg.StepInterval = 10 * time.Millisecond
+
+	ap := New(mp, mm, cfg)
+
+	// Seed a known weight directly so we can assert on it without running the
+	// background loop.
+	ap.mu.Lock()
+	ap.currentWeight = 40
+	ap.mu.Unlock()
+
+	// Simulate two prior rollbacks.
+	ap.IncrRollback()
+	ap.IncrRollback()
+
+	s := ap.Status()
+
+	if !s.Enabled {
+		t.Errorf("Status.Enabled: want true, got false")
+	}
+	if s.CurrentWeight != 40 {
+		t.Errorf("Status.CurrentWeight: want 40, got %d", s.CurrentWeight)
+	}
+	if s.MaxWeight != 60 {
+		t.Errorf("Status.MaxWeight: want 60, got %d", s.MaxWeight)
+	}
+	if s.StepPercent != 20 {
+		t.Errorf("Status.StepPercent: want 20, got %d", s.StepPercent)
+	}
+	if s.StepInterval == "" {
+		t.Errorf("Status.StepInterval: want non-empty string")
+	}
+	if s.RollbackCount != 2 {
+		t.Errorf("Status.RollbackCount: want 2, got %d", s.RollbackCount)
+	}
+}
+
+// TestAutoPromoterRollbackCount verifies that step() increments rollbackCount
+// each time it rolls the weight back to 0.
+func TestAutoPromoterRollbackCount(t *testing.T) {
+	mp := &mockProxy{}
+	// High error rate triggers rollback.
+	mm := &mockMetrics{requests: 200, errors: 100}
+	cfg := defaultCfg()
+
+	ap := New(mp, mm, cfg)
+
+	// Seed a non-zero weight.
+	ap.mu.Lock()
+	ap.currentWeight = 50
+	ap.mu.Unlock()
+
+	ap.step()
+	ap.step()
+
+	if got := ap.rollbackCount.Load(); got != 2 {
+		t.Errorf("rollbackCount: want 2, got %d", got)
+	}
+	status := ap.Status()
+	if status.RollbackCount != 2 {
+		t.Errorf("Status.RollbackCount: want 2, got %d", status.RollbackCount)
+	}
+}
