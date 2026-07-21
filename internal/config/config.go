@@ -267,6 +267,16 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration `yaml:"read_timeout"`
 	WriteTimeout time.Duration `yaml:"write_timeout"`
 	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	// ReadHeaderTimeout bounds how long a client may take to send request
+	// headers. Defaults to 10s when unset; mitigates Slowloris attacks.
+	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
+	// MaxHeaderBytes caps total request header size in bytes. Defaults to
+	// 65536 (64 KiB) when unset; mitigates oversized-header attacks.
+	MaxHeaderBytes int `yaml:"max_header_bytes"`
+	// MaxRequestBodyBytes, when > 0, wraps the request body with an
+	// io.LimitReader and returns 413 to clients that exceed the limit.
+	// Zero means unlimited. Does not apply to WebSocket upgrades.
+	MaxRequestBodyBytes int64 `yaml:"max_request_body_bytes"`
 	// ShutdownTimeout bounds how long graceful shutdown waits for in-flight
 	// requests to drain before forcing close. Defaults to 30s.
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
@@ -1105,6 +1115,12 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Server.ShutdownTimeout <= 0 {
 		cfg.Server.ShutdownTimeout = 30 * time.Second
+	}
+	if cfg.Server.ReadHeaderTimeout <= 0 {
+		cfg.Server.ReadHeaderTimeout = 10 * time.Second
+	}
+	if cfg.Server.MaxHeaderBytes <= 0 {
+		cfg.Server.MaxHeaderBytes = 64 * 1024 // 64 KiB; safer default than stdlib's 1 MiB
 	}
 
 	if cfg.Server.WatchConfig && cfg.Server.WatchInterval <= 0 {
