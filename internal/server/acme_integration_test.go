@@ -290,23 +290,26 @@ func TestACMEPebble(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	pebbleCmd := exec.CommandContext(ctx, pebbleBin, "-config", cfgFile, "-strict")
+	// -strict is omitted: newer Pebble versions reject configs with empty
+	// certificate/privateKey fields under -strict, causing the process to exit
+	// immediately before binding its port.
+	pebbleCmd := exec.CommandContext(ctx, pebbleBin, "-config", cfgFile)
 	pebbleCmd.Env = append(os.Environ(),
-		// Skip the artificial sleep Pebble introduces between validation attempts.
 		"PEBBLE_VA_NOSLEEP=1",
-		// Pebble's VA always considers HTTP-01 challenges valid (we serve them
-		// correctly but Pebble's internal VA needs to reach our listener via its
-		// configured httpPort — set below via the management API).
+		// Ask Pebble's VA to always consider HTTP-01 challenges valid so we
+		// don't need a real publicly-reachable listener.
+		"PEBBLE_VA_ALWAYS_VALID=1",
 	)
-	pebbleOut := &strings.Builder{}
-	pebbleCmd.Stdout = pebbleOut
-	pebbleCmd.Stderr = pebbleOut
+	var pebbleOut strings.Builder
+	pebbleCmd.Stdout = &pebbleOut
+	pebbleCmd.Stderr = &pebbleOut
 	if err := pebbleCmd.Start(); err != nil {
 		t.Fatalf("start pebble: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = pebbleCmd.Process.Kill()
 		_, _ = pebbleCmd.Process.Wait()
+		t.Logf("pebble output:\n%s", pebbleOut.String())
 	})
 
 	// Wait for Pebble's ACME directory to be reachable.
@@ -514,7 +517,7 @@ func waitForHTTPS(t *testing.T, ctx context.Context, url string) {
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("waitForHTTPS: %s not reachable before deadline", url)
+			t.Fatalf("waitForHTTPS: %s not reachable before deadline (ctx: %v)", url, ctx.Err())
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
