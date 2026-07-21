@@ -277,6 +277,15 @@ type ServerConfig struct {
 	// io.LimitReader and returns 413 to clients that exceed the limit.
 	// Zero means unlimited. Does not apply to WebSocket upgrades.
 	MaxRequestBodyBytes int64 `yaml:"max_request_body_bytes"`
+	// MaxInflightRequests, when > 0, limits concurrent in-flight requests. Requests
+	// beyond the limit are either queued (up to MaxInflightQueue) or rejected with 503.
+	MaxInflightRequests int `yaml:"max_inflight_requests"`
+	// MaxInflightQueue is the number of requests that may wait for a slot before
+	// being rejected with 503. Zero means no queueing.
+	MaxInflightQueue int `yaml:"max_inflight_queue"`
+	// QueueTimeout is how long a queued request waits for a slot before 503.
+	// Defaults to 5s when MaxInflightQueue > 0.
+	QueueTimeout time.Duration `yaml:"queue_timeout"`
 	// ShutdownTimeout bounds how long graceful shutdown waits for in-flight
 	// requests to drain before forcing close. Defaults to 30s.
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
@@ -1125,6 +1134,10 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Server.WatchConfig && cfg.Server.WatchInterval <= 0 {
 		cfg.Server.WatchInterval = 5 * time.Second
+	}
+
+	if cfg.Server.MaxInflightQueue > 0 && cfg.Server.QueueTimeout <= 0 {
+		cfg.Server.QueueTimeout = 5 * time.Second
 	}
 
 	if cfg.LoadBalancer.Algorithm == "" {
