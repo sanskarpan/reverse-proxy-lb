@@ -283,9 +283,9 @@ func (m *Metrics) GetPrometheusMetrics() PrometheusMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	totalReqs := uint64(m.TotalRequests.Load())
-	totalErrs := uint64(m.TotalErrors.Load())
-	totalRetries := uint64(m.TotalRetries.Load())
+	totalReqs := uint64(m.TotalRequests.Load())    // #nosec G115 -- counters are always non-negative
+	totalErrs := uint64(m.TotalErrors.Load())     // #nosec G115
+	totalRetries := uint64(m.TotalRetries.Load()) // #nosec G115
 
 	uptime := time.Since(m.startTime).Seconds()
 	var avgRespTime float64
@@ -425,7 +425,7 @@ func (m *Metrics) PrometheusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Response-latency histogram (seconds) with cumulative buckets.
-	histCount := uint64(m.histCount.Load())
+	histCount := uint64(m.histCount.Load()) // #nosec G115 -- histogram count is always non-negative
 	histSum := float64(m.histSumNanos.Load()) / 1e9
 	b.WriteString("# HELP rplb_response_latency_seconds Response latency in seconds.\n")
 	b.WriteString("# TYPE rplb_response_latency_seconds histogram\n")

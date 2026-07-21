@@ -34,14 +34,14 @@ func (w *WeightedRoundRobin) Next() (*Backend, error) {
 	}
 
 	index := atomic.AddUint32(&w.current, 1) - 1
-	sequence := index % uint32(totalWeight)
+	sequence := index % uint32(totalWeight) // #nosec G115 -- totalWeight is sum of small positive weights
 
-	current := uint32(0)
+	current := uint32(0) // #nosec G115
 	for _, b := range healthy {
 		if b.GetWeight() <= 0 {
 			continue
 		}
-		current += uint32(b.GetWeight())
+		current += uint32(b.GetWeight()) // #nosec G115
 		if sequence < current {
 			b.IncrConn()
 			return b, nil

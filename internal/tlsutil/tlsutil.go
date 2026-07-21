@@ -334,7 +334,7 @@ func ServerTLSConfigWithCerts(cfg config.TLSConfig) (*tls.Config, []*tls.Certifi
 
 // loadCAPool reads a PEM CA bundle into an x509.CertPool.
 func loadCAPool(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
+	pem, err := os.ReadFile(path) // #nosec G304 -- path comes from operator-controlled config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("tlsutil: reading client_ca_file %s: %w", path, err)
 	}
@@ -684,7 +684,7 @@ func (s *Stapler) Start(ctx context.Context) error {
 	stop := s.stop
 	s.wg.Add(len(s.targets))
 	for _, t := range s.targets {
-		go s.refreshLoop(stop, t)
+		go s.refreshLoop(stop, t) // #nosec G118 -- background goroutine intentionally uses its own lifecycle context
 	}
 	s.stopMu.Unlock()
 

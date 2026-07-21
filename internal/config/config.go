@@ -1227,7 +1227,7 @@ type MetricsConfig struct {
 
 // Load reads and validates the YAML config at path, applying defaults and environment overrides.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is a CLI-provided config file path, not user input
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}

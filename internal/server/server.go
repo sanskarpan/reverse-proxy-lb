@@ -42,11 +42,6 @@ const (
 	// maxRequestBodyBytes caps client request bodies (10 MiB) to blunt memory-
 	// exhaustion attacks; oversized bodies fail with http.MaxBytesError.
 	maxRequestBodyBytes = 10 << 20
-	// readHeaderTimeout bounds how long a client may take to send request headers,
-	// mitigating slowloris-style attacks.
-	readHeaderTimeout = 10 * time.Second
-	// maxHeaderBytes caps total request header size (1 MiB).
-	maxHeaderBytes = 1 << 20
 )
 
 // Server is the central coordinator: it wires together the proxy, balancer, middleware chain, health checkers, and optional TLS, metrics, and gRPC health servers.

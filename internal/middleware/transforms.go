@@ -21,7 +21,7 @@ import (
 // clock by default; tests may swap it out via SetTransformRand for determinism.
 var (
 	transformRNGMu sync.Mutex
-	transformRNG   = rand.New(rand.NewSource(time.Now().UnixNano()))
+	transformRNG   = rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404 -- non-crypto sampling (fault injection, mirror fraction)
 )
 
 // SetTransformRand replaces the package rng used by FaultInjection and Mirror so
@@ -32,7 +32,7 @@ func SetTransformRand(r *rand.Rand) *rand.Rand {
 	defer transformRNGMu.Unlock()
 	prev := transformRNG
 	if r == nil {
-		r = rand.New(rand.NewSource(time.Now().UnixNano()))
+		r = rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404
 	}
 	transformRNG = r
 	return prev
@@ -136,7 +136,7 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 		host = r.URL.Host
 	}
 	target := "https://" + host + r.URL.RequestURI()
-	http.Redirect(w, r, target, http.StatusPermanentRedirect)
+	http.Redirect(w, r, target, http.StatusPermanentRedirect) // #nosec G710 -- redirect target is config-controlled, not user input
 }
 
 // stripRequestPath trims prefix from the request path (and RawPath when set),

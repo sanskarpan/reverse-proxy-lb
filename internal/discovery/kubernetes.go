@@ -36,7 +36,7 @@ import (
 // inClusterTokenFile and inClusterCAFile are the standard paths for a Pod's
 // ServiceAccount credentials when running inside Kubernetes.
 const (
-	inClusterTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	inClusterTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token" // #nosec G101 -- well-known k8s ServiceAccount path, not a hardcoded credential
 	inClusterCAFile    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 	inClusterAPIServer = "https://kubernetes.default.svc"
 )
@@ -85,7 +85,6 @@ type KubernetesDiscovery struct {
 	resync      time.Duration
 	balancer    balancer.Balancer
 	scheme      string // "http" or "https" for backend URLs
-	backendPort int    // override port when portName is empty
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -195,7 +194,7 @@ type kubeconfig struct {
 // loadKubeconfig parses a kubeconfig YAML file and extracts the API server URL,
 // CA certificate, and bearer token for the current context.
 func (kd *KubernetesDiscovery) loadKubeconfig(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is operator-provided kubeconfig, not user input
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
 	}
