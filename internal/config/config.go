@@ -960,6 +960,16 @@ func applyCircuitBreakerDefaults(cb *CircuitBreakerConfig) {
 	if len(cb.TripOn) == 0 {
 		cb.TripOn = []string{"connect", "timeout"}
 	}
+	// SharedState defaults — only applied when not explicitly set.
+	if cb.SharedState.SyncInterval <= 0 {
+		cb.SharedState.SyncInterval = 1 * time.Second
+	}
+	if cb.SharedState.KeyPrefix == "" {
+		cb.SharedState.KeyPrefix = "rplb:cb"
+	}
+	if cb.SharedState.KeyTTL <= 0 {
+		cb.SharedState.KeyTTL = 30 * time.Second
+	}
 }
 
 // applyRetryDefaults fills in the documented retry defaults.
@@ -1017,6 +1027,27 @@ func validateHealthCheck(hc HealthCheckConfig, label string) error {
 	return nil
 }
 
+// CircuitSharedStateConfig configures distributed circuit-breaker state sharing
+// across replica instances via Redis. When Enabled, each replica periodically
+// pushes its local circuit state to Redis and reads other replicas' states. If
+// any replica reports OPEN for a backend, the local circuit opens immediately.
+// On Redis failure the proxy continues with local state only.
+type CircuitSharedStateConfig struct {
+	// Enabled activates distributed circuit-breaker state sharing; default false.
+	Enabled bool `yaml:"enabled"`
+	// RedisURL is the Redis connection URL (e.g. "redis://localhost:6379");
+	// required when Enabled.
+	RedisURL string `yaml:"redis_url"`
+	// SyncInterval is how often local state is pushed to Redis and remote state
+	// is pulled; default 1s.
+	SyncInterval time.Duration `yaml:"sync_interval"`
+	// KeyPrefix is prepended to every Redis key; default "rplb:cb".
+	KeyPrefix string `yaml:"key_prefix"`
+	// KeyTTL is the Redis key TTL; state older than this is considered stale and
+	// ignored. Default 30s.
+	KeyTTL time.Duration `yaml:"key_ttl"`
+}
+
 // CircuitBreakerConfig tunes the per-backend circuit breaker (consecutive or rolling mode).
 type CircuitBreakerConfig struct {
 	Enabled          bool          `yaml:"enabled"`
@@ -1039,6 +1070,9 @@ type CircuitBreakerConfig struct {
 	// accounting: a subset of {"connect","timeout","5xx"}; default
 	// {"connect","timeout"}.
 	TripOn []string `yaml:"trip_on"`
+	// SharedState configures optional distributed circuit-breaker state sharing
+	// via Redis. Disabled by default; its per-field defaults are applied by Load().
+	SharedState CircuitSharedStateConfig `yaml:"shared_state"`
 }
 
 // RateLimiterConfig configures the rate limiter: algorithm, key, limits, and optional shared store.
