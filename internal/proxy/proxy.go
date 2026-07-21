@@ -122,6 +122,9 @@ const (
 	// helpers (observe/failover/sticky) operate on the same group even when they
 	// only receive the *http.Request.
 	balancerCtxKey
+	// canaryCtxKey marks a request as having been routed to the canary pool so
+	// that proxyRequest / attemptBackend can increment canary metrics counters.
+	canaryCtxKey
 )
 
 // Upstream transport timeouts. These bound how long the proxy waits on a slow or
@@ -432,7 +435,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// When no canary is set (or the roll misses / weight is 0) this is a no-op and
 	// behavior is byte-for-byte unchanged.
 	if p.canary != nil && p.canaryWeight > 0 && p.rollCanary() {
-		r = r.WithContext(context.WithValue(r.Context(), balancerCtxKey, p.canary))
+		// Mark the request as canary-routed so metrics counters are incremented,
+		// then pin the canary balancer on the context for all downstream helpers.
+		ctx := context.WithValue(r.Context(), canaryCtxKey, true)
+		r = r.WithContext(context.WithValue(ctx, balancerCtxKey, p.canary))
+		p.metrics.IncrCanaryRequest()
 	} else {
 		// Resolve the routed balancer ONCE for this request and pin it to the context so
 		// every downstream helper (selection, failover, sticky, observe*) uses the same
@@ -598,6 +605,9 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, primary *ba
 			if written {
 				// The response was already partially sent; we cannot fail over.
 				p.metrics.IncrError()
+				if r.Context().Value(canaryCtxKey) != nil {
+					p.metrics.IncrCanaryError()
+				}
 				return
 			}
 			// Cross-backend failover is only safe when the request can be
@@ -614,6 +624,9 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, primary *ba
 	}
 
 	p.metrics.IncrError()
+	if r.Context().Value(canaryCtxKey) != nil {
+		p.metrics.IncrCanaryError()
+	}
 	switch {
 	case lastErr != nil:
 		// Do not leak internal dial/TLS/backend-URL detail to clients; the

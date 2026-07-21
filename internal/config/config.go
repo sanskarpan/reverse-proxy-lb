@@ -162,6 +162,31 @@ type DNSTarget struct {
 	MaxConns int `yaml:"max_conns"`
 }
 
+// AutoPromoteConfig configures automatic canary weight promotion and rollback.
+// When Enabled, the auto-promoter increases the canary weight by StepPercent
+// every StepInterval (provided the canary error rate stays below
+// ErrorRateThreshold and at least MinRequests have been observed in the window).
+// If RollbackOnDegradation is true and the error rate exceeds the threshold, the
+// weight is immediately reset to 0.
+type AutoPromoteConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// StepPercent is the number of percentage points added each step; default 10.
+	StepPercent int `yaml:"step_percent"`
+	// StepInterval is how often the promoter evaluates the canary; default 60s.
+	StepInterval time.Duration `yaml:"step_interval"`
+	// MaxWeightPercent is the ceiling the promoter will not exceed; default 100.
+	MaxWeightPercent int `yaml:"max_weight_percent"`
+	// ErrorRateThreshold is the maximum acceptable canary error rate (0..1) before
+	// promotion is paused; default 0.01 (1%).
+	ErrorRateThreshold float64 `yaml:"error_rate_threshold"`
+	// MinRequests is the minimum number of canary requests required in a window
+	// before any action is taken; default 100.
+	MinRequests int `yaml:"min_requests"`
+	// RollbackOnDegradation, when true, resets the canary weight to 0 when the
+	// error rate exceeds ErrorRateThreshold.
+	RollbackOnDegradation bool `yaml:"rollback_on_degradation"`
+}
+
 // CanaryConfig configures canary traffic splitting. When Enabled, WeightPercent
 // (0..100) of traffic is sent to the canary Backends pool using Algorithm (and
 // ConsistentHash when Algorithm is "consistent_hash"); the remainder continues
@@ -178,6 +203,8 @@ type CanaryConfig struct {
 	ConsistentHash ConsistentHashConfig `yaml:"consistent_hash"`
 	// Backends are the canary upstreams; at least one is required when Enabled.
 	Backends []BackendConfig `yaml:"backends"`
+	// AutoPromote configures automatic weight stepping and rollback.
+	AutoPromote AutoPromoteConfig `yaml:"auto_promote"`
 }
 
 // MirrorConfig configures fire-and-forget request mirroring. When Enabled, a
@@ -430,6 +457,28 @@ func applyCanaryDefaults(c *CanaryConfig) {
 		if c.Backends[i].HealthCheck != nil {
 			applyHealthCheckDefaults(c.Backends[i].HealthCheck)
 		}
+	}
+	applyAutoPromoteDefaults(&c.AutoPromote)
+}
+
+// applyAutoPromoteDefaults fills in the documented auto-promote defaults. The
+// block stays disabled (Enabled=false) unless explicitly enabled; the remaining
+// fields are always defaulted so downstream consumers see sane values.
+func applyAutoPromoteDefaults(a *AutoPromoteConfig) {
+	if a.StepPercent <= 0 {
+		a.StepPercent = 10
+	}
+	if a.StepInterval <= 0 {
+		a.StepInterval = 60 * time.Second
+	}
+	if a.MaxWeightPercent <= 0 {
+		a.MaxWeightPercent = 100
+	}
+	if a.ErrorRateThreshold <= 0 {
+		a.ErrorRateThreshold = 0.01
+	}
+	if a.MinRequests <= 0 {
+		a.MinRequests = 100
 	}
 }
 
