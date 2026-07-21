@@ -14,7 +14,7 @@ import (
 // Panics only if the OS entropy source is unavailable, which is a fatal
 // condition on any Unix/Windows system.
 func NewRand() *mrand.Rand {
-	return mrand.New(mrand.NewSource(SecureInt64())) //nolint:gosec // seeded from crypto/rand; non-crypto use
+	return mrand.New(mrand.NewSource(SecureInt64())) // #nosec G404 -- seeded from crypto/rand; non-crypto use is intentional
 }
 
 // SecureInt64 reads 8 bytes from crypto/rand and interprets them as a signed
@@ -24,5 +24,5 @@ func SecureInt64() int64 {
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("randutil: crypto/rand unavailable: " + err.Error())
 	}
-	return int64(binary.LittleEndian.Uint64(b[:]))
+	return int64(binary.LittleEndian.Uint64(b[:])) // #nosec G115 -- intentional bit-reinterpretation of entropy bytes
 }
