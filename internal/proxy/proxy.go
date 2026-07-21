@@ -977,25 +977,33 @@ func (p *Proxy) proxyFor(backend *balancer.Backend) (*httputil.ReverseProxy, err
 		return rp, nil
 	}
 
-	rp = httputil.NewSingleHostReverseProxy(target) // #nosec G704 -- SSRF is by design for a reverse proxy; target is validated config
-	rp.Transport = p.transportFor(target)
-	// Reuse copy buffers across requests to cut per-request allocations on the
-	// body-streaming hot path (§10.2).
-	rp.BufferPool = bufferPool
-
-	orig := rp.Director                      //lint:ignore SA1019 Director is functional; Rewrite migration deferred to avoid behaviour change
-	rp.Director = func(req *http.Request) { //lint:ignore SA1019 same rationale as line above
-		orig(req) // sets scheme/host/path and (in ServeHTTP) appends X-Forwarded-For
-		req.Host = target.Host
-		req.Header.Set("X-Real-IP", netutil.ClientIP(req, p.trusted))
-	}
-
-	rp.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
-		if ec, ok := req.Context().Value(errCtxKey).(*errCapture); ok {
-			ec.err = err
-			return // do not write; let the caller retry or fail over
-		}
-		w.WriteHeader(http.StatusBadGateway)
+	// Build the reverse proxy directly so we can use Rewrite (Go 1.20+) instead
+	// of the deprecated Director field.
+	rp = &httputil.ReverseProxy{
+		Transport:  p.transportFor(target),
+		BufferPool: bufferPool, // zero-alloc buffer reuse (§10.2)
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			r.Out.Host = target.Host
+			r.Out.Header.Set("X-Real-IP", netutil.ClientIP(r.In, p.trusted))
+			// ReverseProxy strips X-Forwarded-For from r.Out before the Rewrite
+			// callback fires, so SetXForwarded would only see an empty prior chain.
+			// Restore the incoming XFF first so the chain is preserved correctly.
+			if xff := r.In.Header["X-Forwarded-For"]; len(xff) > 0 {
+				r.Out.Header["X-Forwarded-For"] = append([]string(nil), xff...)
+			}
+			r.SetXForwarded()
+			if _, ok := r.Out.Header["User-Agent"]; !ok {
+				r.Out.Header.Set("User-Agent", "")
+			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			if ec, ok := req.Context().Value(errCtxKey).(*errCapture); ok {
+				ec.err = err
+				return // do not write; let the caller retry or fail over
+			}
+			w.WriteHeader(http.StatusBadGateway)
+		},
 	}
 
 	p.proxies[backend.URL] = rp
