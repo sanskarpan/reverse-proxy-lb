@@ -924,6 +924,18 @@ func (s *Server) setupHTTPServer() {
 		handler = tracing.Middleware()(handler)
 	}
 
+	// Admission ceiling is the absolute outermost gate: it rejects or queues
+	// requests before any other middleware runs, bounding the total concurrency
+	// of the server under load.
+	if s.cfg.Server.MaxInflightRequests > 0 {
+		handler = middleware.Admission(
+			s.cfg.Server.MaxInflightRequests,
+			s.cfg.Server.MaxInflightQueue,
+			s.cfg.Server.QueueTimeout,
+			s.metrics,
+		)(handler)
+	}
+
 	s.httpServer = &http.Server{
 		Addr:              s.cfg.GetAddr(),
 		Handler:           handler,
