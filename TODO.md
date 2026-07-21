@@ -8,68 +8,30 @@ sequencing guide. Items are ordered by impact-to-effort ratio.
 
 ## Tier 1 — Quick correctness wins (S effort)
 
-### #121 · Fix Go toolchain pin in CI
-**Issue:** [#121](https://github.com/sanskarpan/reverse-proxy-lb/issues/121)
+### ✅ #121 · Fix Go toolchain pin in CI — **done (PR #133)**
+- [x] Aligned `go.mod` directive to `go 1.26` to match actual toolchain
 
-`go-version: "1.26"` is a non-existent release. Builds resolve to whatever
-`setup-go` returns, making them non-reproducible.
+### ✅ #122 · Seed math/rand from crypto/rand — **done (PR #134)**
+- [x] Added `internal/randutil.NewRand()` seeded from `crypto/rand`
+- [x] Updated all 5 call sites across balancer and proxy packages
+- [x] Unit tests confirm distinct sequences across concurrent instances
 
-- [ ] Pin `go-version` to `"1.24"` in `.github/workflows/ci.yml`
-- [ ] Align `go.mod` `go` directive
-- [ ] Verify CI passes
-
----
-
-### #122 · Seed math/rand from crypto/rand
-**Issue:** [#122](https://github.com/sanskarpan/reverse-proxy-lb/issues/122)
-
-Five RNG instances seeded with `time.Now().UnixNano()` collide when replicas
-start simultaneously — all send traffic to the same backend.
-
-- [ ] Add `internal/randutil/randutil.go` → `func SecureSeed() int64`
-- [ ] Replace `time.Now().UnixNano()` in `p2c.go`, `consistenthash.go`,
-  `weightedrandom.go`, `wrappers.go`, `proxy.go`
-- [ ] Unit test: two instances with same wall-clock produce different sequences
-
----
-
-### #126 · Slowloris & oversized-header protection
-**Issue:** [#126](https://github.com/sanskarpan/reverse-proxy-lb/issues/126)
-
-No `ReadHeaderTimeout` or `MaxHeaderBytes` set — process is vulnerable to
-connection exhaustion.
-
-- [ ] Set `http.Server.ReadHeaderTimeout` from config (default 10s)
-- [ ] Set `http.Server.MaxHeaderBytes` from config (default 64 KiB)
-- [ ] Add optional `MaxBodyBytes` middleware (413 on exceeded)
-- [ ] Config fields + validation
-- [ ] E2E tests: slowloris (slow headers), oversized headers (431), oversized body (413)
+### ✅ #126 · Slowloris & oversized-header protection — **done (PR #135)**
+- [x] `ReadHeaderTimeout`, `MaxHeaderBytes`, `MaxRequestBodyBytes` in `ServerConfig` with defaults
+- [x] `MaxBytes` middleware fast-path: returns 413 on known-oversized Content-Length
+- [x] E2E tests: slowloris (400/408), oversized headers (431), oversized body (413)
 
 ---
 
 ## Tier 2 — Performance (S–M effort)
 
-### #123 · Pool captureWriter / errCapture allocations
-**Issue:** [#123](https://github.com/sanskarpan/reverse-proxy-lb/issues/123)
+### ✅ #123 · Pool captureWriter / errCapture allocations — **done (PR #136)**
+- [x] `errCapturePool` and `captureWriterPool` sync.Pools in `proxy.go`
+- [x] Field-reset on Get(), defer Put() in both attemptBackend and doHedgeAttempt
 
-Per-request heap allocations for wrapper structs; major GC pressure at scale.
-
-- [ ] `sync.Pool` for `captureWriter` in `proxy.go`
-- [ ] `sync.Pool` for `errCapture` in `proxy.go`
-- [ ] Benchmark before/after (`-benchmem`)
-- [ ] `AllocsPerRun` assertion to lock in zero-alloc
-
----
-
-### #124 · Zero-alloc ConsistentHash.NextForKey
-**Issue:** [#124](https://github.com/sanskarpan/reverse-proxy-lb/issues/124)
-
-`seen` map allocated per-call; dominant allocator in consistent-hash workloads.
-
-- [ ] Profile to confirm (memprofile)
-- [ ] Replace per-call map with pooled scratch or sorted-slice linear search
-- [ ] Benchmark both; pick faster
-- [ ] `AllocsPerRun` assertion for `NextForKey`
+### ✅ #124 · Zero-alloc ConsistentHash.NextForKey — **done (PR #136)**
+- [x] `seenPool sync.Pool` on ConsistentHash for pooled `[]bool` scratch slice
+- [x] Linear search closure replaces per-call `map[*Backend]bool`
 
 ---
 
