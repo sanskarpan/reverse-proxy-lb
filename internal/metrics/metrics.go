@@ -59,6 +59,15 @@ type Metrics struct {
 	// per-backend up/circuit-state gauges without importing balancer.
 	snapshotMu   sync.RWMutex
 	snapshotFunc func() []BackendGauge
+
+	// canaryRequests / canaryErrors are per-window counters incremented by the
+	// proxy whenever a request is routed to the canary pool. They are read and
+	// reset atomically by the auto-promoter each step interval.
+	// canaryMu serialises CanarySnapshot's double-Swap so that errors written
+	// between the two Swaps are not silently dropped.
+	canaryMu       sync.Mutex
+	canaryRequests atomic.Int64
+	canaryErrors   atomic.Int64
 }
 
 // BackendGauge is a scrape-time snapshot of a single backend's health,
@@ -194,6 +203,37 @@ func (m *Metrics) DecInFlight() {
 // IncrRateLimited increments the rate-limited requests counter.
 func (m *Metrics) IncrRateLimited() {
 	m.rateLimited.Add(1)
+}
+
+// IncrCanaryRequest increments the per-window canary request counter. Called
+// by the proxy each time a request is routed to the canary pool.
+func (m *Metrics) IncrCanaryRequest() {
+	m.canaryMu.Lock()
+	m.canaryRequests.Add(1)
+	m.canaryMu.Unlock()
+}
+
+// IncrCanaryError increments the per-window canary error counter. Called by
+// the proxy when a canary-routed request results in an upstream error.
+func (m *Metrics) IncrCanaryError() {
+	m.canaryMu.Lock()
+	m.canaryErrors.Add(1)
+	m.canaryMu.Unlock()
+}
+
+// CanarySnapshot atomically reads and resets the per-window canary request and
+// error counters, returning the values observed since the last call. This is
+// intended to be called once per auto-promote step interval.
+//
+// canaryMu is held across both Swaps so that any IncrCanaryError call that
+// arrives between the two Swaps is counted in the current window rather than
+// silently dropped.
+func (m *Metrics) CanarySnapshot() (requests, errors int64) {
+	m.canaryMu.Lock()
+	requests = m.canaryRequests.Swap(0)
+	errors = m.canaryErrors.Swap(0)
+	m.canaryMu.Unlock()
+	return requests, errors
 }
 
 // SetSnapshotFunc registers a callback invoked at scrape time to obtain
