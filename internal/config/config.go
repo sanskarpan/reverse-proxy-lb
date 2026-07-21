@@ -542,6 +542,18 @@ func applyTracingDefaults(t *TracingConfig) {
 	}
 }
 
+// applyOIDCIntrospectionDefaults fills in the documented OIDC introspection
+// defaults: CacheTTL 30s and CacheSize 1000. The block stays disabled unless
+// explicitly enabled; the remaining fields are always defaulted.
+func applyOIDCIntrospectionDefaults(o *OIDCIntrospectionConfig) {
+	if o.CacheTTL <= 0 {
+		o.CacheTTL = 30 * time.Second
+	}
+	if o.CacheSize <= 0 {
+		o.CacheSize = 1000
+	}
+}
+
 // applyFaultDefaults fills in the documented fault-injection defaults. When
 // enabled, an unset/invalid AbortStatus defaults to 503.
 func applyFaultDefaults(f *FaultConfig) {
@@ -702,6 +714,33 @@ type AuthConfig struct {
 	// JWKSURL is a JWKS endpoint from which RSA public keys are fetched to verify
 	// RS256 JWTs. For RS256, exactly one of JWTPublicKey or JWKSURL must be set.
 	JWKSURL string `yaml:"jwks_url"`
+	// OIDCIntrospection configures optional RFC 7662 token introspection middleware.
+	// When Enabled, Bearer tokens are validated via the IntrospectionURL endpoint
+	// using client_credentials Basic auth. Disabled by default.
+	OIDCIntrospection OIDCIntrospectionConfig `yaml:"oidc_introspection"`
+}
+
+// OIDCIntrospectionConfig configures RFC 7662 token introspection. When Enabled,
+// Bearer tokens are validated by POSTing to IntrospectionURL with client_credentials
+// Basic auth. Responses are cached to avoid a round-trip on every request.
+type OIDCIntrospectionConfig struct {
+	// Enabled activates OIDC/OAuth2 token introspection; default false.
+	Enabled bool `yaml:"enabled"`
+	// IntrospectionURL is the RFC 7662 token introspection endpoint (required when Enabled).
+	IntrospectionURL string `yaml:"introspection_url"`
+	// ClientID is the OAuth2 client identifier used for Basic auth to the endpoint.
+	ClientID string `yaml:"client_id"`
+	// ClientSecret is the OAuth2 client secret used for Basic auth to the endpoint.
+	ClientSecret string `yaml:"client_secret"`
+	// CacheTTL is how long a positive (active) introspection result is cached;
+	// default 30s (capped at the token's exp when shorter).
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// CacheSize is the maximum number of token results held in the LRU cache;
+	// default 1000.
+	CacheSize int `yaml:"cache_size"`
+	// ScopesRequired lists scopes that must all be present in the token's scope
+	// claim. An empty list skips scope enforcement.
+	ScopesRequired []string `yaml:"scopes_required"`
 }
 
 // validClientAuth is the set of accepted downstream ClientAuth modes.
@@ -1163,6 +1202,8 @@ func Load(path string) (*Config, error) {
 	cfg.RateLimiter.SharedStore.Redis.Password = secrets.Expand(cfg.RateLimiter.SharedStore.Redis.Password)
 	cfg.Secrets.Vault.Addr = secrets.Expand(cfg.Secrets.Vault.Addr)
 	cfg.Secrets.Vault.Token = secrets.Expand(cfg.Secrets.Vault.Token)
+	cfg.Security.Auth.OIDCIntrospection.ClientID = secrets.Expand(cfg.Security.Auth.OIDCIntrospection.ClientID)
+	cfg.Security.Auth.OIDCIntrospection.ClientSecret = secrets.Expand(cfg.Security.Auth.OIDCIntrospection.ClientSecret)
 	for i := range cfg.Backends {
 		cfg.Backends[i].URL = secrets.Expand(cfg.Backends[i].URL)
 	}
@@ -1266,6 +1307,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Security.Auth.JWTAlg == "" {
 		cfg.Security.Auth.JWTAlg = "HS256"
 	}
+	applyOIDCIntrospectionDefaults(&cfg.Security.Auth.OIDCIntrospection)
 
 	applyUpstreamDefaults(&cfg.Server.Upstream)
 	applyL4Defaults(&cfg.Server.L4)
@@ -1308,6 +1350,7 @@ func Load(path string) (*Config, error) {
 //	RPLB_RATE_LIMIT_BURST    -> RateLimiter.Burst (int)
 //	RPLB_BACKENDS            -> replaces Backends with a comma-separated URL list,
 //	                            each backend defaulted (Weight 1, MaxConns 100)
+//	ACME_CACHE_DIR           -> TLS.ACME.CacheDir (directory for cert/key cache)
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("RPLB_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -1361,6 +1404,9 @@ func applyEnvOverrides(cfg *Config) {
 		if len(backends) > 0 {
 			cfg.Backends = backends
 		}
+	}
+	if v := os.Getenv("ACME_CACHE_DIR"); v != "" {
+		cfg.TLS.ACME.CacheDir = v
 	}
 }
 
@@ -1868,6 +1914,18 @@ func (c *Config) validateSecurity() error {
 			}
 		default:
 			return fmt.Errorf("config: security.auth.jwt_alg %q must be \"HS256\" or \"RS256\"", c.Security.Auth.JWTAlg)
+		}
+	}
+	if oidc := c.Security.Auth.OIDCIntrospection; oidc.Enabled {
+		if oidc.IntrospectionURL == "" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url is required when oidc_introspection.enabled is true")
+		}
+		u, err := url.Parse(oidc.IntrospectionURL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url %q is not a valid URL", oidc.IntrospectionURL)
+		}
+		if u.Scheme != "https" {
+			return fmt.Errorf("config: security.auth.oidc_introspection.introspection_url %q must use https (RFC 7662 §2.1 requires TLS)", oidc.IntrospectionURL)
 		}
 	}
 	for i, entry := range c.Security.ACL.Allow {

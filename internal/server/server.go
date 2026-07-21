@@ -885,7 +885,7 @@ func (s *Server) setupHTTPServer() {
 	// unchanged. Wrapping order below is applied inside-out, yielding this
 	// outer->inner request flow around the stack built above:
 	//
-	//   Recover -> SecurityHeaders -> CORS -> ACL -> Auth -> MaxBytes -> ...
+	//   Recover -> SecurityHeaders -> CORS -> ACL -> Auth -> OIDCIntrospect -> MaxBytes -> ...
 	//
 	// ACL and Auth run early so unauthorized/blocked requests are rejected
 	// before any proxying or body reading; SecurityHeaders and CORS sit
@@ -893,8 +893,18 @@ func (s *Server) setupHTTPServer() {
 	// including those short-circuited by Auth/ACL.
 	sec := s.cfg.Security
 
-	// Auth is innermost of the security block so it runs just before MaxBytes/
-	// proxy but after ACL has admitted the client.
+	// OIDCIntrospect is the innermost of the auth block: it validates Bearer
+	// tokens via RFC 7662 after JWT/basic/apikey auth has already passed. It must
+	// be applied first (innermost) so that Auth, applied next, becomes the outer
+	// (first-executing) wrapper. Execution order is Auth → OIDCIntrospect → proxy.
+	// When Auth type is "none" and only OIDC introspection is configured, it acts
+	// as the sole auth gate and the Auth wrapper is absent.
+	if sec.Auth.OIDCIntrospection.Enabled {
+		handler = middleware.OIDCIntrospect(sec.Auth.OIDCIntrospection)(handler)
+	}
+
+	// Auth sits just outside OIDCIntrospect so it runs first: a request that
+	// fails JWT/basic/apikey auth is rejected before the introspection round-trip.
 	if authEnabled(sec.Auth) {
 		handler = middleware.Auth(sec.Auth)(handler)
 	}
@@ -1176,9 +1186,9 @@ func (s *Server) Start() error {
 	if s.cfg.Canary.Enabled && s.cfg.Canary.AutoPromote.Enabled {
 		s.autoPromoter = canary.New(s.proxy, s.metrics, s.cfg.Canary.AutoPromote)
 		logging.Info("Starting canary auto-promoter", map[string]interface{}{
-			"step_percent":        s.cfg.Canary.AutoPromote.StepPercent,
-			"step_interval":       s.cfg.Canary.AutoPromote.StepInterval.String(),
-			"max_weight_percent":  s.cfg.Canary.AutoPromote.MaxWeightPercent,
+			"step_percent":         s.cfg.Canary.AutoPromote.StepPercent,
+			"step_interval":        s.cfg.Canary.AutoPromote.StepInterval.String(),
+			"max_weight_percent":   s.cfg.Canary.AutoPromote.MaxWeightPercent,
 			"error_rate_threshold": s.cfg.Canary.AutoPromote.ErrorRateThreshold,
 		})
 		s.autoPromoter.Start()
